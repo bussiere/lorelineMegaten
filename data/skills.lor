@@ -1,0 +1,214 @@
+// ============================================================================
+// SKILL DATABASE
+// ============================================================================
+
+//
+// Content only — the engine reads these fields and nothing else:
+//
+//   kind   damage | heal | stage        which resolver in engine/combat.lor runs
+//   target enemy | ally | self          which target list the UI offers
+//   element phys | fire | ice | elec | force | light | dark | almighty
+//   power  flat base, added to the caster's STR (phys) or MAG (everything else)
+//   mp     the second currency: icons buy actions, MP buys *good* actions
+//   crit   base critical rate, only meaningful for phys (or magicCanCrit)
+//
+// Design shape of the list below: one free-forever basic attack, one expensive
+// physical hammer, one cheap spell per element, plus heal and the six buff /
+// debuff stages. The elemental spells are deliberately identical in cost and
+// power — the choice between them is never about numbers, only about reading
+// the enemy's affinity, which is the decision the whole game is built around.
+//
+
+
+function loadSkillDatabase()
+  skillDb = {
+    // The fallback everyone owns: 0 MP, so a party out of resources can always
+    // act. Its higher base crit rate is what keeps it relevant late — it is the
+    // only free way to earn a bonus half-icon.
+    attack: {
+      name: "Attack",
+      kind: "damage",
+      target: "enemy",
+      element: "phys",
+      power: 34,
+      mp: 0,
+      crit: 8,
+      magicCanCrit: false
+    },
+
+    // Physical burst: triple the power and the best crit rate, paid for in MP.
+    // The finisher of choice for an Overkill attempt on a Commander.
+    heavy_strike: {
+      name: "Heavy Strike",
+      kind: "damage",
+      target: "enemy",
+      element: "phys",
+      power: 100,
+      mp: 12,
+      crit: 14,
+      magicCanCrit: false
+    },
+
+    // The six elemental spells are intentionally interchangeable in cost and
+    // power (42 / 4 MP, no crit). They exist so that "which element?" is a
+    // question about the *target*, never about the spell.
+    agi: {
+      name: "Agi",
+      kind: "damage",
+      target: "enemy",
+      element: "fire",
+      power: 42,
+      mp: 4,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    bufu: {
+      name: "Bufu",
+      kind: "damage",
+      target: "enemy",
+      element: "ice",
+      power: 42,
+      mp: 4,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    zio: {
+      name: "Zio",
+      kind: "damage",
+      target: "enemy",
+      element: "elec",
+      power: 42,
+      mp: 4,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    zan: {
+      name: "Zan",
+      kind: "damage",
+      target: "enemy",
+      element: "force",
+      power: 42,
+      mp: 4,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    // Light and dark cost slightly more: in this roster they are the rarest
+    // resistances, so they are the most reliable weakness probes.
+    hama: {
+      name: "Hama",
+      kind: "damage",
+      target: "enemy",
+      element: "light",
+      power: 44,
+      mp: 5,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    mudo: {
+      name: "Mudo",
+      kind: "damage",
+      target: "enemy",
+      element: "dark",
+      power: 44,
+      mp: 5,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    // Healing scales off MAG at 0.8 — worthwhile for a caster, nearly a flat
+    // top-up for a bruiser. It costs a full icon and earns no bonus, so it is
+    // always a tempo loss traded for survival.
+    dia: {
+      name: "Dia",
+      kind: "heal",
+      target: "ally",
+      power: 55,
+      mp: 5,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    // The stage skills: +1 for the caster's side (…kaja), -1 for the enemy
+    // (…nda), same cost, same clamped ladder. Because both write to the same
+    // stat stage, buffing an ally and debuffing its opponent are strictly
+    // equivalent in effect — the choice is about who survives to benefit.
+    //
+    // Sukukaja/Sukunda are the sleeper picks: AGI drives turn ORDER as well as
+    // accuracy, so they rearrange who gets offered the side's icons.
+    tarukaja: {
+      name: "Tarukaja",
+      kind: "stage",
+      target: "ally",
+      stat: "attack",
+      stages: 1,
+      power: 0,
+      mp: 6,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    rakukaja: {
+      name: "Rakukaja",
+      kind: "stage",
+      target: "ally",
+      stat: "defense",
+      stages: 1,
+      power: 0,
+      mp: 6,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    sukukaja: {
+      name: "Sukukaja",
+      kind: "stage",
+      target: "ally",
+      stat: "agility",
+      stages: 1,
+      power: 0,
+      mp: 6,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    tarunda: {
+      name: "Tarunda",
+      kind: "stage",
+      target: "enemy",
+      stat: "attack",
+      stages: -1,
+      power: 0,
+      mp: 6,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    rakunda: {
+      name: "Rakunda",
+      kind: "stage",
+      target: "enemy",
+      stat: "defense",
+      stages: -1,
+      power: 0,
+      mp: 6,
+      crit: 0,
+      magicCanCrit: false
+    },
+
+    sukunda: {
+      name: "Sukunda",
+      kind: "stage",
+      target: "enemy",
+      stat: "agility",
+      stages: -1,
+      power: 0,
+      mp: 6,
+      crit: 0,
+      magicCanCrit: false
+    }
+  }

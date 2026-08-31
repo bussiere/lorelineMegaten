@@ -1,0 +1,223 @@
+// ============================================================================
+// GENERIC PURE-LORELINE COMBAT FLOW
+// ============================================================================
+//
+// Core engine is array/map based.
+// This text UI exposes 4 target slots and 8 skill slots.
+//
+
+// WHY A ROUTER BEAT
+//
+// Loreline drives the flow, so the engine cannot loop on its own: every action
+// must return to a beat that decides what happens next. CombatRouter is that
+// hub, re-entered after each resolved action, and it answers three questions in
+// priority order — is the battle over, is this side out of icons, whose turn is
+// it. Every other beat ends by jumping back here.
+
+beat CombatRouter
+  checkBattleEnd()
+
+  if battleEnded
+    -> BattleEnd
+
+  if !hasPressTurns()
+    finishCurrentSide()
+    -> CombatRouter
+
+  if currentSide == "player"
+    -> PlayerTurn
+  else
+    -> EnemyTurn
+
+
+// The player's action menu. It always reprints the whole board first: in a
+// text UI there is no persistent HUD, and spending icons well requires seeing
+// HP, buff stages and the remaining icons at the moment of the decision.
+//
+// The 8 skill lines are static — a Loreline `choice` cannot be generated from
+// an array — so each is guarded by `currentSkillExists(n)` and simply
+// disappears for an actor with fewer skills.
+
+beat PlayerTurn
+  $battlefieldStatus()
+
+  $turnHeader()
+
+  Available skills:
+  $currentSkillList()
+
+  choice
+    Skill 1 if currentSkillExists(0)
+      selectCurrentSkillSlot(0)
+      -> SkillSelected
+
+    Skill 2 if currentSkillExists(1)
+      selectCurrentSkillSlot(1)
+      -> SkillSelected
+
+    Skill 3 if currentSkillExists(2)
+      selectCurrentSkillSlot(2)
+      -> SkillSelected
+
+    Skill 4 if currentSkillExists(3)
+      selectCurrentSkillSlot(3)
+      -> SkillSelected
+
+    Skill 5 if currentSkillExists(4)
+      selectCurrentSkillSlot(4)
+      -> SkillSelected
+
+    Skill 6 if currentSkillExists(5)
+      selectCurrentSkillSlot(5)
+      -> SkillSelected
+
+    Skill 7 if currentSkillExists(6)
+      selectCurrentSkillSlot(6)
+      -> SkillSelected
+
+    Skill 8 if currentSkillExists(7)
+      selectCurrentSkillSlot(7)
+      -> SkillSelected
+
+    // PASS and Analyze are the two non-attacking plays, and they are what
+    // make the menu a decision rather than a damage picker: PASS trades half
+    // an icon for turn order, Analyze buys information for free.
+
+    PASS — manipulate Press Turns
+      performPass()
+      $battleLog
+      -> CombatRouter
+
+    Analyze affinities — free UI action
+      $enemyAnalysis()
+      -> PlayerTurn
+
+
+// Targeting is a second step, routed by the skill's own `target` field. The
+// re-check of `canUseSkill` matters: MP or liveness may have changed between
+// the moment the menu was drawn and the moment the player picked — nothing is
+// spent until a target is confirmed, and Cancel costs nothing.
+
+beat SkillSelected
+  if !canUseSkill(currentActorId(), selectedSkill)
+    Cannot use $selectedSkill right now.
+    -> PlayerTurn
+
+  if selectedSkillTargetsSelf()
+    useSelectedOnSelf()
+    $battleLog
+    -> CombatRouter
+
+  if selectedSkillTargetsEnemy()
+    -> ChooseEnemyTarget
+
+  if selectedSkillTargetsAlly()
+    -> ChooseAllyTarget
+
+  Unsupported target mode for skill $selectedSkill.
+  -> PlayerTurn
+
+
+// Four fixed target slots, mirroring `maxActiveMenuSlots`. `teamSlotAlive`
+// greys out the dead and the empty; `teamSlotLabel` carries the HP readout and
+// the [COMMANDER] tag, so the player picks a target while seeing exactly what
+// the choice is worth.
+
+beat ChooseEnemyTarget
+  choice
+    Enemy slot 1 — $teamSlotLabel("enemy", 0) if teamSlotAlive("enemy", 0)
+      useSelectedOn(teamSlotId("enemy", 0))
+      $battleLog
+      -> CombatRouter
+
+    Enemy slot 2 — $teamSlotLabel("enemy", 1) if teamSlotAlive("enemy", 1)
+      useSelectedOn(teamSlotId("enemy", 1))
+      $battleLog
+      -> CombatRouter
+
+    Enemy slot 3 — $teamSlotLabel("enemy", 2) if teamSlotAlive("enemy", 2)
+      useSelectedOn(teamSlotId("enemy", 2))
+      $battleLog
+      -> CombatRouter
+
+    Enemy slot 4 — $teamSlotLabel("enemy", 3) if teamSlotAlive("enemy", 3)
+      useSelectedOn(teamSlotId("enemy", 3))
+      $battleLog
+      -> CombatRouter
+
+    Cancel
+      -> PlayerTurn
+
+
+beat ChooseAllyTarget
+  choice
+    Ally slot 1 — $teamSlotLabel("player", 0) if teamSlotAlive("player", 0)
+      useSelectedOn(teamSlotId("player", 0))
+      $battleLog
+      -> CombatRouter
+
+    Ally slot 2 — $teamSlotLabel("player", 1) if teamSlotAlive("player", 1)
+      useSelectedOn(teamSlotId("player", 1))
+      $battleLog
+      -> CombatRouter
+
+    Ally slot 3 — $teamSlotLabel("player", 2) if teamSlotAlive("player", 2)
+      useSelectedOn(teamSlotId("player", 2))
+      $battleLog
+      -> CombatRouter
+
+    Ally slot 4 — $teamSlotLabel("player", 3) if teamSlotAlive("player", 3)
+      useSelectedOn(teamSlotId("player", 3))
+      $battleLog
+      -> CombatRouter
+
+    Cancel
+      -> PlayerTurn
+
+
+// The enemy side plays with the same functions the player's menu calls — the
+// AI has no privileged resolution path, only its own decision function. The
+// board is reprinted here too so the player can watch their icon pool and
+// their HP change.
+
+beat EnemyTurn
+  $battlefieldStatus()
+
+  $turnHeader()
+
+  enemyAct()
+  $battleLog
+
+  -> CombatRouter
+
+
+// The epilogue, and the payoff of the Commander design: a battle stopped by a
+// Commander kill is announced differently from an ordinary wipe, and the reward
+// summary spells out base XP, Overkill percentage and bonus separately so the
+// player can see which of their choices produced the number.
+
+beat BattleEnd
+  if victor == "player"
+    if battleEndReason == "commander_defeated"
+      COMMANDER DEFEATED — battle ends immediately.
+    else
+      VICTORY.
+
+    $rewardSummary()
+
+  else if victor == "enemy"
+    DEFEAT.
+
+  else
+    ENGINE ERROR.
+    $battleLog
+
+  Final state:
+  $battlefieldStatus()
+
+  choice
+    Restart menu
+      -> Start
+
+    End
+      -> .

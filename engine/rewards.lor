@@ -1,0 +1,159 @@
+// ============================================================================
+// COMMANDER / REWARD SYSTEM
+// ============================================================================
+//
+// IMPORTANT:
+// The Commander dies immediately when the killing hit reduces HP to <= 0.
+// There is NO post-death overkill phase.
+//
+// Example:
+//   Max HP      = 1000
+//   HP pre-hit  = 120
+//   final hit   = 620
+//   final HP    = -500
+//   overkill    = 50%
+//
+// Formula:
+//   raw = (-finalHP / maxHP) * 100
+//   overkillPercent = clamp(raw, 0, 100)
+//
+// Rewards:
+// - only enemies actually defeated before battle end contribute their base
+//   XP/currency values.
+// - surviving minions give NOTHING when the Commander dies.
+// - the configurable Overkill bonus is calculated from the killed-enemy
+//   base reward and the Commander Overkill percentage.
+//
+
+// WHY THE COMMANDER EXISTS
+//
+// A Commander turns a group fight into a decision. The player can grind the
+// escort down for their guaranteed XP, or race the Commander and end the
+// battle early — cheaper in resources, but every minion still standing pays
+// nothing. Overkill is the third option on that dial: overshooting the killing
+// blow converts raw damage into a bonus on what was already earned, so a
+// player who set up buffs and a weakness before the finisher is paid for the
+// setup instead of for the extra turns it saved.
+//
+// Note the bonus multiplies the *defeated-enemy* base, never a flat sum: a
+// 100% Overkill on a Commander killed with the escort untouched still doubles
+// only the Commander's own value. Rushing is never strictly dominant.
+
+
+function resetRewards()
+  defeatedEnemyXp = 0
+  defeatedEnemyReward = 0
+
+  overkillXpBonus = 0
+  overkillRewardBonus = 0
+
+  totalXpReward = 0
+  totalCurrencyReward = 0
+
+  commanderWasKilled = false
+  commanderHpBeforeFinalHit = 0
+  commanderFinalHp = 0
+  commanderFinalHitDamage = 0
+  commanderOverkillRawPercent = 0
+  commanderOverkillPercent = 0
+
+
+// Rewards are banked at the moment of death, not counted at the end — by then
+// the battle may have stopped with minions alive, and those pay nothing.
+// `defeatRewardCounted` guards against a second death event on the same actor
+// (a REPEL can kill an already-dying attacker mid-resolution).
+function registerEnemyDefeat(actor)
+  if actor == null || actor.team != "enemy" || actor.defeatRewardCounted
+    return
+
+  actor.defeatRewardCounted = true
+
+  defeatedEnemyXp += actor.xpValue
+  defeatedEnemyReward += actor.rewardValue
+
+
+// Overkill = how far past zero the killing blow went, as a share of the
+// Commander's max HP. Measuring against MAX HP is what keeps the metric fair
+// across the roster: dealing 500 excess damage to a 500 HP captain is a rout,
+// the same 500 on a 5000 HP boss is a rounding error.
+//
+// Capped at 100% so an absurd nuke cannot print unbounded rewards, and floored
+// at 0 for the ordinary case of a hit that lands exactly on zero.
+function calculateCommanderOverkill(finalHp, maxHp)
+  if maxHp <= 0 || finalHp >= 0
+    return 0
+
+  var raw = (-finalHp / maxHp) * 100
+  return clamp(raw, 0, 100)
+
+
+// Called from `applyFatalCheck` at the exact instant HP goes negative, before
+// anything can clamp it. The raw (uncapped) percentage is kept alongside the
+// capped one purely so the epilogue can show the player the full number they
+// achieved — "312% raw, 100% counted" reads as an accomplishment, whereas a
+// silently truncated 100% reads as a cap they never noticed hitting.
+function registerCommanderKill(actor, hpBeforeHit, finalHitDamage)
+  commanderWasKilled = true
+
+  commanderHpBeforeFinalHit = hpBeforeHit
+  commanderFinalHp = actor.hp
+  commanderFinalHitDamage = finalHitDamage
+
+  if actor.maxHp > 0
+    commanderOverkillRawPercent = max(
+      0,
+      (-commanderFinalHp / actor.maxHp) * 100
+    )
+  else
+    commanderOverkillRawPercent = 0
+
+  commanderOverkillPercent = calculateCommanderOverkill(
+    commanderFinalHp,
+    actor.maxHp
+  )
+
+
+// Linear payout: at `overkillXpBonusAt100 = 1.0`, 50% Overkill is +50% of the
+// base. Linear (rather than a threshold table) so the player can feel each
+// extra point of damage pay off, instead of chasing an invisible breakpoint.
+function finalizeRewards()
+  var overkillRatio = commanderOverkillPercent / 100
+
+  overkillXpBonus = round(
+    defeatedEnemyXp *
+    overkillRatio *
+    combatRules.overkillXpBonusAt100
+  )
+
+  overkillRewardBonus = round(
+    defeatedEnemyReward *
+    overkillRatio *
+    combatRules.overkillCurrencyBonusAt100
+  )
+
+  totalXpReward = defeatedEnemyXp + overkillXpBonus
+  totalCurrencyReward = defeatedEnemyReward + overkillRewardBonus
+
+
+function rewardSummary()
+  var lines = []
+
+  lines.add("=== REWARDS ===")
+  lines.add("Defeated-enemy XP: $defeatedEnemyXp")
+  lines.add("Defeated-enemy currency: $defeatedEnemyReward")
+
+  if commanderWasKilled
+    lines.add("")
+    lines.add("Commander HP before final hit: $commanderHpBeforeFinalHit")
+    lines.add("Final hit damage: $commanderFinalHitDamage")
+    lines.add("Commander final HP: $commanderFinalHp")
+    lines.add("Raw Overkill: ${round(commanderOverkillRawPercent * 10) / 10}%")
+    lines.add("Capped Overkill: ${round(commanderOverkillPercent * 10) / 10}% / 100%")
+    lines.add("Overkill XP bonus: +$overkillXpBonus")
+    lines.add("Overkill currency bonus: +$overkillRewardBonus")
+
+  lines.add("")
+  lines.add("TOTAL XP: $totalXpReward")
+  lines.add("TOTAL CURRENCY: $totalCurrencyReward")
+
+  return lines.join("\n")

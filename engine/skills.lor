@@ -1,0 +1,171 @@
+// ============================================================================
+// SKILL / NUMERIC COMBAT HELPERS
+// ============================================================================
+//
+// All the arithmetic of a single action lives here. Every formula reads its
+// constants from `combatRules` (data/rules.lor) — nothing is tuned in code, so
+// a designer can rebalance the whole game without touching engine/.
+//
+
+
+function getSkill(skillId)
+  return skillDb.get(skillId)
+
+
+function hasSkill(actorId, skillId)
+  var actor = getActor(actorId)
+
+  if actor == null
+    return false
+
+  return actor.skills.has(skillId)
+
+
+// The MP check is part of the UI contract: `scenes/combat_flow.lor` greys out
+// a skill the actor cannot pay for, instead of letting the player spend an
+// icon on an action that would fail.
+function canUseSkill(actorId, skillId)
+  var actor = getActor(actorId)
+  var skill = getSkill(skillId)
+
+  if actor == null || skill == null
+    return false
+
+  return actor.alive && actor.skills.has(skillId) && actor.mp >= skill.mp
+
+
+// A single physical/magical split, keyed off the element. It is why a
+// high-STR bruiser wants `phys` skills and a high-MAG caster wants elements:
+// the same skill power reads very differently on the two.
+function attackStat(actor, element)
+  if element == "phys"
+    return actor.str
+
+  return actor.mag
+
+
+// damage = (power + stat * scale) * variance * atkStage / defStage
+//
+// The additive `power + stat` term is what keeps low-level skills relevant:
+// stats scale the floor, they do not multiply the skill. Variance (90-110%)
+// exists so identical exchanges do not produce identical numbers — it keeps
+// a fight from being solvable on paper without making outcomes swingy.
+//
+// Buff stages divide rather than subtract, so Rakukaja is worth the same
+// proportion of a hit whether it lands on a 40-damage jab or a 300-damage
+// nuke.
+//
+// Floored at 1: a hit that connects always shows a number. "0 damage" would
+// read as a bug to the player, and Press Turn already has MISS for nothing.
+//
+// NOTE: the critical flag arrives through the global `calcIsCritical` rather
+// than a 4th parameter — this build of loreline.jar caps user functions at 3
+// arguments (see README).
+function calculateDamage(actor, target, skill)
+  var stat = attackStat(actor, skill.element)
+  var base = skill.power + stat * combatRules.statDamageScale
+  var variance = random(combatRules.damageVarianceMin, combatRules.damageVarianceMax) / 100
+
+  var attackMult = stageMultiplier(actor.attackStage)
+  var defenseMult = stageMultiplier(target.defenseStage)
+
+  var damage = base * variance * attackMult / defenseMult
+
+  if calcIsCritical
+    damage *= combatRules.criticalMultiplier
+
+  return max(1, round(damage))
+
+
+// Accuracy is an AGI *duel*, not a flat stat: only the gap matters, at half a
+// point per AGI, clamped to [65, 99]. The clamp is the design statement — the
+// fastest actor in the game can still miss, and the slowest can still land, so
+// no amount of Sukukaja stacking turns the fight deterministic.
+//
+// SMIRK, OFFENSIVE SIDE: a smirking attacker cannot miss, which is what makes
+// the state worth building toward — a guaranteed hit is also a guaranteed
+// escape from the two-icon MISS penalty.
+function calculateHitChance(actor, target, smirkAttack)
+  if smirkAttack && combatRules.smirkAutoHit
+    return 100
+
+  var diff = effectiveAgi(actor) - effectiveAgi(target)
+  var chanceValue = combatRules.baseHitChance + round(diff * combatRules.agiHitScale)
+
+  return clamp(chanceValue, combatRules.minHitChance, combatRules.maxHitChance)
+
+
+// Criticals are the physical fighter's answer to elemental weaknesses: they
+// earn the same HALF-icon bonus without needing to know the enemy's affinity.
+// That is why magic cannot crit unless a skill opts in with `magicCanCrit` —
+// casters already have the weakness lane.
+//
+// LUCK is a duel like AGI, at a third of a point, on top of the skill's own
+// crit rate. The [1, 45] clamp keeps a crit always possible and never the
+// default plan.
+//
+// The smirk flag comes in through the global `calcSmirkAttack` (3-parameter
+// limit, as in `calculateDamage`).
+function calculateCritChance(actor, target, skill)
+  if calcSmirkAttack && combatRules.smirkAutoCrit
+    return 100
+
+  if skill.element != "phys" && !skill.magicCanCrit
+    return 0
+
+  var luckBonus = round((actor.luck - target.luck) * combatRules.luckCritScale)
+
+  return clamp(
+    skill.crit + luckBonus,
+    combatRules.minCritChance,
+    combatRules.maxCritChance
+  )
+
+
+// SMIRK is the system's momentum token, granted on a 1-in-N roll after the
+// plays the game wants to reward — landing a weakness or a crit (offense), or
+// shrugging off an attack with null/repel/drain (defense). Combat.lor consumes
+// it on the holder's next attack, so it is a one-shot: auto-hit, auto-crit,
+// and immunity to being read as weak until it is spent.
+//
+// Already-smirking actors are excluded so the state cannot be refreshed for
+// free, which would let a lucky streak lock a side out of the fight.
+function maybeGrantSmirk(actor)
+  if actor == null || !actor.alive || actor.smirk
+    return false
+
+  if chance(combatRules.smirkChanceDenominator)
+    actor.smirk = true
+    return true
+
+  return false
+
+
+// Buffs and debuffs share one clamped ladder per stat, so Tarukaja and Tarunda
+// cancel out exactly. That symmetry is what makes debuffing an enemy and
+// buffing an ally strategically interchangeable — the choice is about which
+// side of the exchange is worth an icon, not about which spell is stronger.
+function applyStage(actor, stat, amount)
+  if actor == null
+    return
+
+  if stat == "attack"
+    actor.attackStage = clamp(
+      actor.attackStage + amount,
+      -combatRules.maxStage,
+      combatRules.maxStage
+    )
+
+  else if stat == "defense"
+    actor.defenseStage = clamp(
+      actor.defenseStage + amount,
+      -combatRules.maxStage,
+      combatRules.maxStage
+    )
+
+  else if stat == "agility"
+    actor.agilityStage = clamp(
+      actor.agilityStage + amount,
+      -combatRules.maxStage,
+      combatRules.maxStage
+    )

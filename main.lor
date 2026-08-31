@@ -1,0 +1,82 @@
+// ============================================================================
+// LORELINE PRESS TURN + COMMANDER ENGINE
+// Generic, data-driven combat prototype
+// ============================================================================
+//
+// LAYERING — the one rule of this project:
+//
+//   engine/  pure rules, no content. Never names a character, a skill or an
+//            encounter; every number it uses comes from data/.
+//   data/    all the content and all the tuning. Editing it changes the game;
+//            editing engine/ changes the game's laws.
+//   scenes/  the Loreline presentation shell — beats, choices, text. It only
+//            calls engine functions and interpolates their results.
+//
+// Import order is free: Loreline resolves functions at call time, and every
+// import shares one global namespace (which is also why two beats may never
+// share a name across files).
+//
+
+import engine/state
+import engine/press_turn
+import engine/actors
+import engine/skills
+import engine/rewards
+import engine/combat
+import engine/ai
+import engine/ui
+
+import data/rules
+import data/skills
+import data/actors
+import data/encounters
+import data/registry
+
+import scenes/combat_flow
+
+
+// Boot: load the content databases, then let the player pick a demo.
+//
+// The three `commander_demo` entries are the same encounter with three
+// different openings — that is the whole point of the menu: initiative decides
+// which side spends the first round's icons, and against an even squad that
+// single difference is felt for the entire fight.
+
+beat Start
+  initializeDatabases()
+
+  PRESS TURN + COMMANDER ENGINE
+
+  Rules demonstrated here:
+  - Press Turn action economy
+  - Weak / Crit / Miss / Null / Repel / Drain / Pass
+  - AGI order and neutral initiative
+  - Smirk
+  - every enemy group can designate one Commander
+  - killing the Commander ends the battle immediately
+  - surviving enemies give no XP / reward
+  - Commander final HP can go negative on the killing blow
+  "- Overkill % = negative HP / Commander max HP, capped at 100%"
+
+  choice
+    Commander demo — Player Advantage
+      startEncounter("commander_demo", "player")
+      -> CombatRouter
+
+    Commander demo — Neutral Initiative
+      startEncounter("commander_demo", "neutral")
+      -> CombatRouter
+
+    Commander demo — Enemy Advantage
+      startEncounter("commander_demo", "enemy")
+      -> CombatRouter
+
+    // Same rules, one enemy with bonus icons instead of three bodies — the
+    // solo-boss shape of the same action economy.
+
+    Boss extra-Press demo
+      startEncounter("boss_press_test", "player")
+      -> CombatRouter
+
+    End
+      -> .

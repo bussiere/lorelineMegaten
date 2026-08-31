@@ -1,0 +1,200 @@
+// ============================================================================
+// GENERIC ENEMY AI
+// ============================================================================
+//
+// Profiles:
+//   smart  : heal if needed, seek weakness, avoid Null/Repel/Drain.
+//   random : random usable damage skill + random living target.
+//
+// The AI plays by the same rules as the player and reads the same Press Turn
+// economy — it is not a scripted damage source. `smart` is what makes an
+// enemy side threatening: it hunts the party's weaknesses to double its own
+// action count, so a party that fields an actor weak to a common element
+// really does lose the round faster.
+//
+// `random` exists as a difficulty dial: mindless fodder that wastes icons on
+// resisted elements and lets the player breathe. Set per template via the
+// `ai` field in data/actors.lor.
+//   random : random usable damage skill + random living target.
+//
+
+function randomLivingId(team)
+  var source = sourceForTeam(team)
+  var ids = []
+
+  for actor in source
+    if actor.alive
+      ids.add(actor.id)
+
+  if ids.length() == 0
+    return ""
+
+  return ids.pick()
+
+
+// Returns the most wounded ally, but only if it is below the threshold — the
+// AI heals when it is worth an icon, not whenever anyone is scratched.
+// Threshold is `aiHealThreshold` in data/rules.lor (45% by default).
+function findInjuredAlly(team, ratioThreshold)
+  var source = sourceForTeam(team)
+  var bestId = ""
+  var bestRatio = 2.0
+
+  for actor in source
+    if actor.alive
+      var ratio = actor.hp / actor.maxHp
+
+      if ratio < bestRatio
+        bestRatio = ratio
+        bestId = actor.id
+
+  if bestRatio <= ratioThreshold
+    return bestId
+
+  return ""
+
+
+// The AI's whole view of the elemental wheel, expressed in one scoring table.
+// The gaps between the tiers are what matter:
+//
+//   weak (1000)  dwarfs any skill power difference, so hitting a weakness
+//                always beats casting a stronger neutral spell — the AI plays
+//                for the extra action, exactly as a good player would;
+//   normal (100) vs resist (10): resisted damage is a last resort but still
+//                preferable to nothing;
+//   null (-1000), repel/drain (-3000): scored so far below anything else that
+//                the AI will never volunteer to lose its side's whole turn.
+//
+// Note this is *perfect* knowledge of the party's affinities. It is a
+// deliberate asymmetry: the player has the free "Analyze" action to level the
+// field, and an enemy that probes blindly would waste rounds and read as
+// stupid rather than as fair.
+function aiAffinityScore(affinity)
+  switch affinity
+    case "weak"
+      return 1000
+
+    case "normal"
+      return 100
+
+    case "resist"
+      return 10
+
+    case "null"
+      return -1000
+
+    case "repel"
+      return -3000
+
+    case "drain"
+      return -3000
+
+    default
+      return 100
+
+
+function chooseRandomDamageAction(actor)
+  var usable = []
+
+  for skillId in actor.skills
+    var skill = getSkill(skillId)
+
+    if skill != null && skill.kind == "damage" && actor.mp >= skill.mp
+      usable.add(skillId)
+
+  if usable.length() == 0
+    return { skill: "", target: "" }
+
+  return {
+    skill: usable.pick(),
+    target: randomLivingId(opposingTeam(actor.team))
+  }
+
+
+// Scores every (usable skill x living target) pair and takes the best.
+//
+// The `(1 - hpRatio) * 50` term is a finisher bias worth at most half a tier:
+// enough to make the AI close out a nearly dead party member rather than
+// spread damage, never enough to override a weakness read.
+function chooseSmartDamageAction(actor)
+  var targetTeam = opposingTeam(actor.team)
+  var targets = sourceForTeam(targetTeam)
+
+  var bestSkill = ""
+  var bestTarget = ""
+  var bestScore = -999999
+
+  for skillId in actor.skills
+    var skill = getSkill(skillId)
+
+    if skill != null && skill.kind == "damage" && actor.mp >= skill.mp
+      for target in targets
+        if target.alive
+          var affinity = getAffinity(target, skill.element)
+          var score = aiAffinityScore(affinity) + skill.power
+
+          var hpRatio = target.hp / target.maxHp
+          score += round((1 - hpRatio) * 50)
+
+          if score > bestScore
+            bestScore = score
+            bestSkill = skillId
+            bestTarget = target.id
+
+  if bestSkill == ""
+    return chooseRandomDamageAction(actor)
+
+  return { skill: bestSkill, target: bestTarget }
+
+
+// First affordable heal in the skill list — order in data/actors.lor is
+// therefore priority order for the AI.
+function findUsableHeal(actor)
+  for skillId in actor.skills
+    var skill = getSkill(skillId)
+
+    if skill != null && skill.kind == "heal" && actor.mp >= skill.mp
+      return skillId
+
+  return ""
+
+
+// Decision order for a `smart` actor: heal a badly hurt ally first, otherwise
+// attack. Healing is checked first because losing a member costs the side an
+// icon every round from then on — keeping the body count up is worth more than
+// the damage the heal displaces.
+function chooseEnemyAction()
+  var actor = currentActor()
+
+  if actor == null
+    return { skill: "", target: "" }
+
+  if actor.ai == "random"
+    return chooseRandomDamageAction(actor)
+
+  var healSkill = findUsableHeal(actor)
+
+  if healSkill != ""
+    var injured = findInjuredAlly(actor.team, combatRules.aiHealThreshold)
+
+    if injured != ""
+      return { skill: healSkill, target: injured }
+
+  return chooseSmartDamageAction(actor)
+
+
+// An enemy with nothing usable PASSES rather than stalling: the icon is still
+// paid (at the half rate), so a side out of MP cannot freeze the battle.
+function enemyAct()
+  var actor = currentActor()
+
+  if actor == null
+    return
+
+  var decision = chooseEnemyAction()
+
+  if decision.skill == "" || decision.target == ""
+    performPass()
+    return
+
+  performSkill(actor.id, decision.target, decision.skill)

@@ -1,0 +1,59 @@
+// ============================================================================
+// ENCOUNTER DATABASE
+// ============================================================================
+//
+// commanderSlot points to the enemyTeam array slot.
+//
+// Example:
+// enemyTeam: ["goblin_commander", "goblin_soldier", "goblin_mage"]
+// commanderSlot: 0
+//
+// As soon as enemy slot 0 reaches HP <= 0, battle ends immediately.
+//
+
+// An encounter is the whole difficulty statement of a fight: who is on each
+// side (order matters — it is the UI slot order), who commands, and how many
+// bonus icons each side opens with.
+//
+// `playerBonusPress` / `enemyBonusPress` are the preferred boss dial: adding
+// an icon changes how often a side acts, which is felt turn by turn, whereas
+// adding HP only makes the same fight longer.
+//
+
+
+function loadEncounterDatabase()
+  encounterDb = {
+    // Three enemies, so the enemy side opens with 3 icons against the party's
+    // 4. `commanderSlot: 0` on the tankiest member makes the "rush or clear"
+    // decision the point of the fight.
+    commander_demo: {
+      name: "Goblin Commander Squad",
+      playerTeam: ["hunter", "pixie", "jack_frost", "oni"],
+
+      enemyTeam: [
+        "goblin_commander",
+        "goblin_soldier",
+        "goblin_mage"
+      ],
+
+      commanderSlot: 0,
+
+      playerBonusPress: 0,
+      enemyBonusPress: 0
+    },
+
+    // One enemy, 1 base icon + 2 bonus = 3 per round against the party's 4.
+    // Same pressure as the squad above, from a single body — this is the
+    // pattern for any solo boss in the engine.
+    boss_press_test: {
+      name: "Nue Commander — Extra Press",
+      playerTeam: ["hunter", "pixie", "jack_frost", "oni"],
+
+      enemyTeam: ["nue"],
+
+      commanderSlot: 0,
+
+      playerBonusPress: 0,
+      enemyBonusPress: 2
+    }
+  }

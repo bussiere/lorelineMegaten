@@ -1,0 +1,115 @@
+// ============================================================================
+// GAME RULES / TUNING
+// ============================================================================
+
+//
+// THE BALANCE SHEET. Every formula in engine/ reads its constants from here,
+// so the whole game can be retuned without touching a line of engine code.
+// Each value below is a design lever, not a magic number.
+//
+
+
+function loadCombatRules()
+  combatRules = {
+    // Damage
+    // Weak/resist are deliberately modest as *damage*: 1.5x and 0.5x. The real
+    // payoff of hitting a weakness is the extra action it buys (see
+    // engine/press_turn.lor), not the raw number. Push these too far and the
+    // system degenerates into an elemental damage race with the icon economy
+    // as decoration.
+    weakMultiplier: 1.5,
+    resistMultiplier: 0.5,
+    criticalMultiplier: 1.5,
+
+    // Stats add to skill power rather than multiplying it: at 1.45, a 50-STR
+    // actor contributes ~72 flat damage, so a 34-power basic Attack stays
+    // usable all game while a 100-power skill is still clearly better.
+    // Variance is +/-10% — enough that no two exchanges read identically, small
+    // enough that a plan is still a plan.
+    statDamageScale: 1.45,
+    healMagScale: 0.8,
+    damageVarianceMin: 90,
+    damageVarianceMax: 110,
+
+    // Accuracy / crit
+    // Accuracy floor and ceiling are the anti-determinism guard rails: even a
+    // huge AGI lead caps at 99%, and a hopeless one still lands 65% of the
+    // time. Since a MISS costs two icons, a 10% base miss chance is already a
+    // real risk on the side's last icon.
+    baseHitChance: 90,
+    agiHitScale: 0.5,
+    minHitChance: 65,
+    maxHitChance: 99,
+
+    // Crit is the physical answer to elemental weakness (same half-icon
+    // reward), so its ceiling is kept well under a coin flip: at 45% max it is
+    // a good gamble, never a reliable engine.
+    luckCritScale: 0.333,
+    minCritChance: 1,
+    maxCritChance: 45,
+
+    // Buff/debuff stages: 3 steps of 15% each way, so a fully buffed attacker
+    // hitting a fully debuffed defender swings damage by roughly 2.6x. Wide
+    // enough to be worth spending icons on, bounded enough that the buff phase
+    // cannot replace the fight.
+    // Buff/debuff stages
+    maxStage: 3,
+    stageStep: 0.15,
+
+    // Neutral initiative: highest AGI + d20 per side. A d20 against AGI values
+    // in the 30-70 range means speed tilts the opening without owning it.
+    // Neutral initiative approximation
+    neutralInitiativeDie: 20,
+
+    // SMIRK — the comeback/momentum token. 1-in-4 on a qualifying event, and
+    // once held it grants auto-hit, auto-crit and immunity to being read as
+    // weak, then is spent on the next attack.
+    //
+    // The four `smirkFrom*` switches decide which side of the table it swings:
+    // `smirkFromWeakOrCrit` rewards the aggressor for a good read, while the
+    // null/repel/drain sources hand it to a defender who just absorbed a bad
+    // one. Turning the defensive ones off makes elemental mistakes far
+    // cheaper — it is the single biggest difficulty dial in this file.
+    // Smirk
+    smirkChanceDenominator: 4,
+    smirkAutoHit: true,
+    smirkAutoCrit: true,
+    smirkProtectsWeakness: true,
+
+    smirkFromWeakOrCrit: true,
+    smirkFromNull: true,
+    smirkFromRepel: true,
+    smirkFromDrain: true,
+
+    // AI: an enemy heals an ally only below 45% HP. Higher and the AI stalls
+    // on scratches, lower and it never saves anyone in time.
+    // AI
+    aiHealThreshold: 0.45,
+
+    // -----------------------------------------------------------------------
+    // COMMANDER OVERKILL REWARD
+    // -----------------------------------------------------------------------
+    //
+    // Overkill itself is always:
+    //   clamp((-commanderFinalHp / commanderMaxHp) * 100, 0, 100)
+    //
+    // The values below only control HOW MUCH that percentage increases reward.
+    //
+    // 1.0 means:
+    //   0% Overkill   => +0% of killed-enemy base reward
+    //   50% Overkill  => +50%
+    //   100% Overkill => +100%
+    //
+    // So 100% Overkill doubles the rewards of enemies actually defeated.
+    //
+    overkillXpBonusAt100: 1.0,
+    overkillCurrencyBonusAt100: 1.0,
+
+    // UI shell limits. A Loreline `choice` list is written out statically, so
+    // these are the number of target lines and skill lines the scene actually
+    // declares — raising them means adding matching lines in
+    // scenes/combat_flow.lor, not just editing this number.
+    // Pure Loreline menu shell
+    maxActiveMenuSlots: 4,
+    maxSkillMenuSlots: 8
+  }

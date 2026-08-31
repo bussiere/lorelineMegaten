@@ -1,0 +1,325 @@
+// ============================================================================
+// ACTORS / TEAMS / TURN ORDER
+// ============================================================================
+//
+// A *template* is immutable content from data/actors.lor; an *actor* is a
+// runtime instance of it that owns HP, MP, buff stages and a death flag.
+// Nothing in this file hard-codes a character or a skill — swapping the data/
+// folder swaps the whole cast.
+//
+
+
+function getActorTemplate(templateId)
+  return actorDb.get(templateId)
+
+
+// Identity is the string id, not an array position: an actor keeps its slot in
+// `party`/`enemies` even after death (the UI still lists it as DEAD, and the
+// Commander is addressed by id), so searching by id is the only safe lookup.
+function getActor(id)
+  for actor in party
+    if actor.id == id
+      return actor
+
+  for actor in enemies
+    if actor.id == id
+      return actor
+
+  return null
+
+
+function sourceForTeam(team)
+  if team == "player"
+    return party
+
+  return enemies
+
+
+function opposingTeam(team)
+  if team == "player"
+    return "enemy"
+
+  return "player"
+
+
+// The id encodes team and slot, which makes it unique even when the same
+// template is fielded twice in one encounter (two Goblin Soldiers).
+//
+// `skills` and `affinity` are COPIED: an actor's runtime state must never write
+// through to the shared template, or a buff or a scripted resistance change
+// would follow that species into every later battle.
+//
+// `maxHp`/`maxMp` are snapshotted from the template at spawn time — the actor
+// is self-contained afterwards, which is what lets Overkill divide by a max HP
+// that is still correct after the Commander's HP has gone negative.
+function spawnActor(templateId, team, slot)
+  var template = getActorTemplate(templateId)
+
+  if template == null
+    return null
+
+  return {
+    id: "${team}_${slot}_${templateId}",
+    templateId: templateId,
+    name: template.name,
+    team: team,
+    slot: slot,
+
+    hp: template.hp,
+    maxHp: template.hp,
+    mp: template.mp,
+    maxMp: template.mp,
+
+    str: template.str,
+    mag: template.mag,
+    agi: template.agi,
+    luck: template.luck,
+
+    xpValue: template.has("xpValue") ? template.xpValue : 0,
+    rewardValue: template.has("rewardValue") ? template.rewardValue : 0,
+
+    alive: true,
+    defeatRewardCounted: false,
+    smirk: false,
+
+    attackStage: 0,
+    defenseStage: 0,
+    agilityStage: 0,
+
+    skills: template.skills.copy(),
+    affinity: template.affinity.copy(),
+
+    ai: template.has("ai") ? template.ai : "smart"
+  }
+
+
+function buildTeam(templateIds, team)
+  var result = []
+  var slot = 0
+
+  for templateId in templateIds
+    var actor = spawnActor(templateId, team, slot)
+
+    if actor != null
+      result.add(actor)
+      slot += 1
+
+  return result
+
+
+function countAlive(team)
+  var source = sourceForTeam(team)
+  var count = 0
+
+  for actor in source
+    if actor.alive
+      count += 1
+
+  return count
+
+
+// Used to reason about the minions that outlive their Commander. They are
+// alive but worthless: the battle stops the moment the Commander falls and
+// they pay nothing (see engine/rewards.lor).
+function countAliveNonCommanderEnemies()
+  var count = 0
+
+  for actor in enemies
+    if actor.alive && actor.id != commanderId
+      count += 1
+
+  return count
+
+
+function highestAgi(team)
+  var source = sourceForTeam(team)
+  var best = 0
+
+  for actor in source
+    if actor.alive
+      var value = effectiveAgi(actor)
+
+      if value > best
+        best = value
+
+  return best
+
+
+// Turn order = descending effective AGI (bubble sort, teams are 1-6 actors so
+// the cost is irrelevant). It is rebuilt at the start of every side turn, so
+// Sukukaja / Sukunda do not just change hit chance — they re-order who gets
+// offered the side's icons, which is the real reason to cast them.
+function buildOrder(team)
+  var source = sourceForTeam(team)
+  var order = []
+
+  for actor in source
+    if actor.alive
+      order.add(actor.id)
+
+  var n = order.length()
+
+  if n > 1
+    for i in 0...n
+      var limit = n - i - 1
+
+      if limit > 0
+        for j in 0...limit
+          var a = getActor(order[j])
+          var b = getActor(order[j + 1])
+
+          if effectiveAgi(a) < effectiveAgi(b)
+            var temp = order[j]
+            order[j] = order[j + 1]
+            order[j + 1] = temp
+
+  return order
+
+
+// Dead actors drop out of the order entirely; recomputing both sides keeps the
+// two lists consistent even when a REPEL killed the attacker on the other
+// team.
+function refreshOrders()
+  playerOrder = buildOrder("player")
+  enemyOrder = buildOrder("enemy")
+
+
+function currentOrder()
+  if currentSide == "player"
+    return playerOrder
+
+  return enemyOrder
+
+
+function currentActorId()
+  var order = currentOrder()
+
+  if order.length() == 0
+    return ""
+
+  if actorIndex >= order.length()
+    actorIndex = 0
+
+  return order[actorIndex]
+
+
+function currentActor()
+  return getActor(currentActorId())
+
+
+// Moves to the next living actor, wrapping around. Wrapping matters: with a
+// HALF icon left and only one survivor, that survivor is simply offered the
+// spend again — icons are a side resource, not a per-actor allowance.
+//
+// The `checked` counter bounds the scan so an all-dead order cannot spin
+// forever (the battle-end check runs one beat later, in CombatRouter).
+function advanceActor()
+  var order = currentOrder()
+
+  if order.length() == 0
+    return
+
+  actorIndex = (actorIndex + 1) % order.length()
+
+  var checked = 0
+
+  while checked < order.length() && !isAlive(order[actorIndex])
+    actorIndex = (actorIndex + 1) % order.length()
+    checked += 1
+
+
+function isAlive(id)
+  var actor = getActor(id)
+  return actor != null && actor.alive
+
+
+function isCommander(actor)
+  return actor != null && actor.id == commanderId
+
+
+function commander()
+  return getActor(commanderId)
+
+
+// SLOT ACCESSORS — the bridge to the Loreline UI.
+//
+// A `choice` list is written out statically in the .lor scene, so the UI can
+// only address fixed slots ("Enemy slot 3"), never a dynamic list. These
+// helpers answer, per slot, the three things a choice line needs: is it
+// selectable, what does it read as, and which actor id does it resolve to.
+function teamSlotActor(team, slot)
+  var source = sourceForTeam(team)
+
+  if slot < 0 || slot >= source.length()
+    return null
+
+  return source[slot]
+
+
+function teamSlotAlive(team, slot)
+  var actor = teamSlotActor(team, slot)
+  return actor != null && actor.alive
+
+
+function teamSlotId(team, slot)
+  var actor = teamSlotActor(team, slot)
+
+  if actor == null
+    return ""
+
+  return actor.id
+
+
+function teamSlotLabel(team, slot)
+  var actor = teamSlotActor(team, slot)
+
+  if actor == null
+    return "Empty"
+
+  var tag = isCommander(actor) ? " [COMMANDER]" : ""
+
+  if !actor.alive
+    return "${actor.name}$tag [DEAD]"
+
+  return "${actor.name}$tag — ${actor.hp}/${actor.maxHp} HP"
+
+
+// The elemental rock-paper-scissors that the entire Press Turn economy hangs
+// on: `weak` and `crit` earn actions, `null`/`repel`/`drain` destroy them.
+//
+// `almighty` is deliberately outside the wheel — it is the escape hatch for
+// designers who want damage that can never be resisted, and equally never
+// earns a bonus icon.
+//
+// SMIRK, DEFENSIVE SIDE: a smirking target reads as `normal` on its own
+// weakness. A smirking enemy therefore cannot be chain-exploited, which stops
+// the attacker from converting one lucky read into an endless icon supply.
+function getAffinity(target, element)
+  if element == "almighty"
+    return "normal"
+
+  var affinity = target.affinity.get(element)
+
+  if affinity == null
+    affinity = "normal"
+
+  if combatRules.smirkProtectsWeakness && target.smirk && affinity == "weak"
+    return "normal"
+
+  return affinity
+
+
+// Buffs/debuffs are *stages*, not percentages: each step is worth
+// `stageStep` (15% by default) and the ladder is clamped to +/-`maxStage`.
+// Discrete stages keep buff stacking legible to the player and bound the
+// damage swing a full buff/debuff pair can produce (here 1.45x / 0.55x).
+function stageMultiplier(stage)
+  var capped = clamp(stage, -combatRules.maxStage, combatRules.maxStage)
+  return 1 + capped * combatRules.stageStep
+
+
+// Floored at 1 so a fully debuffed actor still has a workable position in the
+// turn order and a non-degenerate hit chance: Sukunda makes a target act last
+// and miss more, it never removes it from the fight.
+function effectiveAgi(actor)
+  return max(1, actor.agi * stageMultiplier(actor.agilityStage))

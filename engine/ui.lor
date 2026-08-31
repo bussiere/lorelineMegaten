@@ -1,0 +1,200 @@
+// ============================================================================
+// TEXT UI HELPERS
+// ============================================================================
+//
+// Everything the scene layer can display. Loreline beats can only interpolate
+// the return value of a function, so each piece of the HUD is exposed as one
+// call — the .lor scene stays a layout, never a computation.
+//
+
+
+function actorLine(actor)
+  var hpDisplay = actor.alive ? actor.hp : max(0, actor.hp)
+  var status = actor.alive ? "${hpDisplay}/${actor.maxHp} HP  ${actor.mp}/${actor.maxMp} MP" : "DEAD"
+
+  if isCommander(actor)
+    status += "  [COMMANDER]"
+
+  if actor.smirk
+    status += "  [SMIRK]"
+
+  var stages = []
+
+  if actor.attackStage != 0
+    stages.add("ATK ${actor.attackStage > 0 ? "+" : ""}${actor.attackStage}")
+
+  if actor.defenseStage != 0
+    stages.add("DEF ${actor.defenseStage > 0 ? "+" : ""}${actor.defenseStage}")
+
+  if actor.agilityStage != 0
+    stages.add("AGI ${actor.agilityStage > 0 ? "+" : ""}${actor.agilityStage}")
+
+  if stages.length() > 0
+    status += "  [" + stages.join(", ") + "]"
+
+  return "${actor.name}: $status"
+
+
+// The full board, reprinted before every action. In a text UI there is no
+// persistent HUD, so re-showing HP, MP, buff stages and the icon row is the
+// only way the player can plan a spend — hiding it would make the Press Turn
+// economy unplayable rather than merely terse.
+function battlefieldStatus()
+  var lines = []
+
+  lines.add("=== ROUND $roundNumber ===")
+  lines.add("Side: ${currentSide.upper()}")
+  lines.add("Press Turns: ${pressIcons()}")
+  lines.add("")
+  lines.add("PLAYER")
+
+  for actor in party
+    lines.add("  " + actorLine(actor))
+
+  lines.add("")
+  lines.add("ENEMIES")
+
+  for actor in enemies
+    lines.add("  " + actorLine(actor))
+
+  return lines.join("\n")
+
+
+// One-line reminder of who is acting and with what: effective AGI (buffs
+// included, so a Sukukaja is visibly doing something) and the icons still
+// available to spend.
+function turnHeader()
+  var actor = currentActor()
+
+  if actor == null
+    return "No active combatant."
+
+  var smirkText = actor.smirk ? " — SMIRK ACTIVE" : ""
+  return "${actor.name}'s action — AGI ${round(effectiveAgi(actor))} — Press ${pressIcons()}$smirkText"
+
+
+// SKILL SLOTS — the actor's skill list projected onto the 8 fixed choice lines
+// of `beat PlayerTurn`. Out-of-range slots return "" so the scene can disable
+// the extra lines instead of crashing on a 3-skill character.
+function currentSkillId(slot)
+  var actor = currentActor()
+
+  if actor == null
+    return ""
+
+  if slot < 0 || slot >= actor.skills.length()
+    return ""
+
+  return actor.skills[slot]
+
+
+function currentSkillExists(slot)
+  return currentSkillId(slot) != ""
+
+
+// Enabled = the skill exists AND is affordable right now. A greyed-out entry
+// still shows its name and cost, so an unaffordable skill teaches the player
+// what to save MP for.
+function currentSkillEnabled(slot)
+  var id = currentSkillId(slot)
+
+  if id == ""
+    return false
+
+  return canUseSkill(currentActorId(), id)
+
+
+function currentSkillLabel(slot)
+  var id = currentSkillId(slot)
+
+  if id == ""
+    return "Empty"
+
+  var skill = getSkill(id)
+
+  if skill == null
+    return "Unknown [$id]"
+
+  var actor = currentActor()
+  var suffix = actor.mp >= skill.mp ? "" : " [NO MP]"
+
+  return "${slot + 1}. ${skill.name} — ${skill.mp} MP$suffix"
+
+
+function currentSkillList()
+  var actor = currentActor()
+
+  if actor == null
+    return ""
+
+  var lines = []
+
+  for i in 0...actor.skills.length()
+    lines.add(currentSkillLabel(i))
+
+  return lines.join("\n")
+
+
+// Two-step targeting: the skill is latched here, then `beat SkillSelected`
+// routes to the enemy or ally list depending on what it targets. A Cancel in
+// the target list returns to the skill list without having spent anything.
+function selectCurrentSkillSlot(slot)
+  selectedSkill = currentSkillId(slot)
+
+
+function selectedSkillObject()
+  return getSkill(selectedSkill)
+
+
+function selectedSkillTargetsEnemy()
+  var skill = selectedSkillObject()
+  return skill != null && skill.target == "enemy"
+
+
+function selectedSkillTargetsAlly()
+  var skill = selectedSkillObject()
+  return skill != null && skill.target == "ally"
+
+
+function selectedSkillTargetsSelf()
+  var skill = selectedSkillObject()
+  return skill != null && skill.target == "self"
+
+
+function useSelectedOn(targetId)
+  selectedTargetId = targetId
+  performSkill(currentActorId(), targetId, selectedSkill)
+
+
+function useSelectedOnSelf()
+  performSkill(currentActorId(), currentActorId(), selectedSkill)
+
+
+// ANALYZE — the free UI action.
+//
+// Reading affinities costs no Press Turn and no MP, which is a deliberate
+// design choice: the fun of the system is *acting on* elemental knowledge, not
+// paying icons to brute-force it out of the enemy. It also balances the AI's
+// perfect knowledge of the party (see engine/ai.lor).
+function affinitySummary(actor)
+  var keys = ["phys", "fire", "ice", "elec", "force", "light", "dark"]
+  var parts = []
+
+  for key in keys
+    parts.add("${key.upper()}=${actor.affinity.get(key)}")
+
+  return parts.join("  ")
+
+
+// Only living enemies are listed — a corpse has nothing left to teach — and
+// the Commander is tagged, so the player can see at a glance which affinity
+// row is the one that ends the battle.
+function enemyAnalysis()
+  var lines = []
+
+  for actor in enemies
+    if actor.alive
+      var tag = isCommander(actor) ? " [COMMANDER]" : ""
+      lines.add("${actor.name}$tag: ${affinitySummary(actor)}")
+
+  return lines.join("\n")

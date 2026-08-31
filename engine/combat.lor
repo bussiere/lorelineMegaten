@@ -1,0 +1,510 @@
+// ============================================================================
+// ENCOUNTER + ACTION RESOLUTION
+// ============================================================================
+//
+// The rules layer: it owns the battle lifecycle (start, side turns, end) and
+// the resolution of one action from intent to consequences. Everything the
+// player or the AI does funnels through `performSkill` / `performPass`, and
+// every one of those paths ends with exactly one `applyPressResult` and one
+// `advanceActor` — that pairing is the invariant that keeps the action economy
+// honest.
+//
+
+
+function getEncounter(encounterId)
+  return encounterDb.get(encounterId)
+
+
+// Single teardown point for everything declared in engine/state.lor. A field
+// left out here survives into the next encounter, which is the classic source
+// of "the second battle starts with the first one's Press Turns".
+function resetBattleRuntime()
+  party = []
+  enemies = []
+
+  playerOrder = []
+  enemyOrder = []
+
+  currentSide = "player"
+  actorIndex = 0
+
+  pressFull = 0
+  pressHalf = 0
+
+  roundNumber = 1
+  battleEnded = false
+  victor = ""
+  battleEndReason = ""
+
+  currentEncounterId = ""
+  initiativeLog = ""
+  battleLog = ""
+
+  commanderId = ""
+
+  selectedSkill = ""
+  selectedTargetId = ""
+
+  resetRewards()
+
+
+// The Commander is designated by array slot in the encounter data, then
+// resolved to a runtime id once. An encounter without `commanderSlot` (or with
+// an out-of-range one) simply has no Commander and falls back to the classic
+// "kill them all" victory rule — the mechanic is opt-in per encounter.
+function configureCommander(encounter)
+  commanderId = ""
+
+  if encounter == null
+    return
+
+  if encounter.has("commanderSlot")
+    var slot = encounter.commanderSlot
+
+    if slot >= 0 && slot < enemies.length()
+      commanderId = enemies[slot].id
+
+
+// The only entry point a story script needs:
+//     startEncounter("commander_demo", "player")
+// `initiativeMode` is the story's chance to make the fiction matter — an
+// ambush the player walked into starts with "enemy" and hands the first full
+// round of icons to the other side.
+//
+// An unknown id ends the battle in an `error` state instead of throwing: a
+// typo in a .lor should surface as a readable message in-game, not as a dead
+// script.
+function startEncounter(encounterId, initiativeMode)
+  resetBattleRuntime()
+
+  var encounter = getEncounter(encounterId)
+
+  if encounter == null
+    battleEnded = true
+    victor = "error"
+    battleEndReason = "unknown_encounter"
+    battleLog = "Unknown encounter: $encounterId"
+    return
+
+  currentEncounterId = encounterId
+
+  party = buildTeam(encounter.playerTeam, "player")
+  enemies = buildTeam(encounter.enemyTeam, "enemy")
+
+  configureCommander(encounter)
+
+  refreshOrders()
+  resolveInitiative(initiativeMode)
+
+
+// A side's opening icon count = one FULL per living member (+ encounter
+// bonus). This is where losing members compounds: the side that is down an
+// actor also acts one time fewer every round from then on.
+//
+// `playerBonusPress` / `enemyBonusPress` are the boss dial — giving a lone Nue
+// +2 icons lets a single-actor enemy trade with a party of four without
+// inflating its stats into a damage sponge.
+function startSideTurn(side)
+  currentSide = side
+  actorIndex = 0
+
+  refreshOrders()
+
+  var base = countAlive(side)
+  var bonus = 0
+
+  var encounter = getEncounter(currentEncounterId)
+
+  if encounter != null
+    if side == "player" && encounter.has("playerBonusPress")
+      bonus = encounter.playerBonusPress
+
+    if side == "enemy" && encounter.has("enemyBonusPress")
+      bonus = encounter.enemyBonusPress
+
+  pressFull = max(0, base + bonus)
+  pressHalf = 0
+
+
+// Sides alternate strictly; the round counter advances when control returns to
+// the player, so "round" always means one full exchange.
+function finishCurrentSide()
+  if currentSide == "player"
+    startSideTurn("enemy")
+  else
+    roundNumber += 1
+    startSideTurn("player")
+
+
+// Neutral initiative is decided by the fastest member of each side plus a d20.
+// AGI tilts the odds without deciding them, so a slow party is not condemned
+// to always eat the first round — the die keeps the opening honest.
+function resolveInitiative(mode)
+  if mode == "player"
+    initiativeLog = "PLAYER ADVANTAGE — your side starts."
+    startSideTurn("player")
+    return
+
+  if mode == "enemy"
+    initiativeLog = "ENEMY ADVANTAGE — the enemy side starts."
+    startSideTurn("enemy")
+    return
+
+  var playerRoll = highestAgi("player") + random(1, combatRules.neutralInitiativeDie)
+  var enemyRoll = highestAgi("enemy") + random(1, combatRules.neutralInitiativeDie)
+
+  if playerRoll >= enemyRoll
+    initiativeLog = "Neutral initiative: PLAYER $playerRoll vs ENEMY $enemyRoll — PLAYER starts."
+    startSideTurn("player")
+  else
+    initiativeLog = "Neutral initiative: PLAYER $playerRoll vs ENEMY $enemyRoll — ENEMY starts."
+    startSideTurn("enemy")
+
+
+// Rewards are finalized here, at the exact instant the battle stops. Anything
+// still alive at this point has already missed its chance to pay out.
+function endBattleAsPlayerVictory(reason)
+  battleEnded = true
+  victor = "player"
+  battleEndReason = reason
+
+  // The moment Commander dies, no surviving minion is converted into reward.
+  finalizeRewards()
+
+
+function endBattleAsEnemyVictory(reason)
+  battleEnded = true
+  victor = "enemy"
+  battleEndReason = reason
+
+  finalizeRewards()
+
+
+// Checked between every action (and again by the CombatRouter beat). The order
+// of the tests IS the rule set:
+//   1. party wiped     -> defeat, whatever the enemy side looks like
+//   2. Commander dead  -> immediate victory, escort irrelevant
+//   3. enemies wiped   -> ordinary victory, for encounters with no Commander
+function checkBattleEnd()
+  if battleEnded
+    return
+
+  if countAlive("player") == 0
+    endBattleAsEnemyVictory("party_defeated")
+    return
+
+  // Commander encounters end immediately when the Commander is dead.
+  if commanderId != ""
+    var boss = commander()
+
+    if boss != null && !boss.alive
+      endBattleAsPlayerVictory("commander_defeated")
+      return
+
+  // Fallback for encounters without a Commander.
+  if countAlive("enemy") == 0
+    endBattleAsPlayerVictory("all_enemies_defeated")
+
+
+// Death handling, and the one place where negative HP is meaningful.
+//
+// An enemy Commander KEEPS its negative HP: that overshoot is the Overkill
+// measurement, so clamping it here would silently delete the reward. Party
+// members are clamped to 0 instead — nothing reads their overshoot, and a
+// negative number in the HUD would just look broken.
+//
+// Returns whether the target died, so the caller can decorate the battle log
+// with the kill without re-testing HP.
+function applyFatalCheck(target, hpBeforeHit, finalHitDamage)
+  if target.hp > 0
+    return false
+
+  target.alive = false
+
+  if target.team == "enemy"
+    registerEnemyDefeat(target)
+
+    if isCommander(target)
+      // Preserve the Commander's negative final HP exactly.
+      registerCommanderKill(target, hpBeforeHit, finalHitDamage)
+
+      // Immediate victory: no extra action, no second hit, no surviving-minion
+      // reward. CombatRouter will jump directly to BattleEnd.
+      endBattleAsPlayerVictory("commander_defeated")
+
+  else
+    // Party members do not need negative HP for reward calculations.
+    target.hp = 0
+
+  return true
+
+
+// THE CORE RESOLUTION. Order of operations is deliberate:
+//
+//   1. validate, then PAY MP — a miss still costs MP, so a low-accuracy gamble
+//      is a real resource decision;
+//   2. roll to hit, and consume SMIRK whatever happens: the state is spent by
+//      attacking, not by succeeding, so a smirking actor should be spent on a
+//      play that matters;
+//   3. read the affinity, roll the crit, compute damage;
+//   4. branch on null / repel / drain, which never deal damage to the target
+//      and always wreck the attacking side's remaining icons;
+//   5. otherwise apply weak/resist multipliers, damage, death, press cost.
+//
+// Every branch ends with exactly one `applyPressResult` + `advanceActor`: an
+// early return that forgets either would hand the side an infinite turn.
+function resolveDamageSkill(actorId, targetId, skillId)
+  var actor = getActor(actorId)
+  var target = getActor(targetId)
+  var skill = getSkill(skillId)
+
+  if actor == null || target == null || skill == null
+    battleLog = "Invalid damage action."
+    return
+
+  if !actor.alive || !target.alive
+    battleLog = "The action has no living target."
+    return
+
+  if actor.mp < skill.mp
+    battleLog = "${actor.name} does not have enough MP."
+    return
+
+  actor.mp -= skill.mp
+
+  var smirkAttack = actor.smirk
+  var hitChance = calculateHitChance(actor, target, smirkAttack)
+  var hitRoll = random(1, 100)
+
+  if actor.smirk
+    actor.smirk = false
+
+  if hitRoll > hitChance
+    applyPressResult("miss")
+    battleLog = "${actor.name} uses ${skill.name} on ${target.name}: MISS!  [Press: ${pressIcons()}]"
+    advanceActor()
+    return
+
+  var affinity = getAffinity(target, skill.element)
+
+  calcSmirkAttack = smirkAttack
+  var critChance = calculateCritChance(actor, target, skill)
+  var isCritical = random(1, 100) <= critChance
+
+  calcIsCritical = isCritical
+  var damage = calculateDamage(actor, target, skill)
+
+  if affinity == "null"
+    applyPressResult("null")
+
+    var defenderSmirk = false
+    if combatRules.smirkFromNull
+      defenderSmirk = maybeGrantSmirk(target)
+
+    battleLog = "${actor.name} uses ${skill.name} on ${target.name}: NULL!${defenderSmirk ? " " + target.name + " enters SMIRK." : ""}  [Press: ${pressIcons()}]"
+
+    advanceActor()
+    return
+
+  // REPEL is the harshest outcome in the game and the reason to use the free
+  // "Analyze affinities" action: the attacker eats its own damage — and can
+  // die to it, which is why the fatal check and battle-end run here — while
+  // the whole side loses every icon it had left.
+  if affinity == "repel"
+    var actorHpBefore = actor.hp
+
+    actor.hp -= damage
+
+    applyPressResult("repel")
+
+    var defenderSmirk = false
+    if combatRules.smirkFromRepel
+      defenderSmirk = maybeGrantSmirk(target)
+
+    applyFatalCheck(actor, actorHpBefore, damage)
+
+    battleLog = "${actor.name} uses ${skill.name}: REPEL! ${actor.name} takes $damage reflected damage.${defenderSmirk ? " " + target.name + " enters SMIRK." : ""} ALL remaining Press Turns are lost."
+
+    checkBattleEnd()
+    advanceActor()
+    return
+
+  // DRAIN heals the target for what the attack would have dealt: the play is
+  // worse than doing nothing, and it still costs the side its entire turn.
+  if affinity == "drain"
+    target.hp = min(target.maxHp, target.hp + damage)
+
+    applyPressResult("drain")
+
+    var defenderSmirk = false
+    if combatRules.smirkFromDrain
+      defenderSmirk = maybeGrantSmirk(target)
+
+    battleLog = "${actor.name} uses ${skill.name}: DRAIN! ${target.name} absorbs $damage HP.${defenderSmirk ? " " + target.name + " enters SMIRK." : ""} ALL remaining Press Turns are lost."
+
+    advanceActor()
+    return
+
+  if affinity == "weak"
+    damage = round(damage * combatRules.weakMultiplier)
+
+  else if affinity == "resist"
+    damage = max(1, round(damage * combatRules.resistMultiplier))
+
+  var hpBeforeHit = target.hp
+
+  target.hp -= damage
+
+  var killed = applyFatalCheck(target, hpBeforeHit, damage)
+
+  // Weakness outranks critical when both happen: they grant the same HALF-icon
+  // bonus, so the log reports the read the player actually made rather than
+  // double-counting a single reward.
+  var result = "normal"
+
+  if affinity == "weak"
+    result = "weak"
+
+  else if isCritical
+    result = "crit"
+
+  else if affinity == "resist"
+    result = "resist"
+
+  applyPressResult(result)
+
+  var smirkGained = false
+
+  if combatRules.smirkFromWeakOrCrit && (affinity == "weak" || isCritical)
+    smirkGained = maybeGrantSmirk(actor)
+
+  var tags = ""
+
+  if affinity == "weak"
+    tags += " WEAK!"
+
+  if affinity == "resist"
+    tags += " RESIST."
+
+  if isCritical
+    tags += " CRITICAL!"
+
+  if smirkGained
+    tags += " SMIRK!"
+
+  if killed
+    if isCommander(target)
+      tags += " COMMANDER DOWN! OVERKILL ${round(commanderOverkillPercent * 10) / 10}%."
+    else
+      tags += " ${target.name} is defeated."
+
+  battleLog = "${actor.name} uses ${skill.name} on ${target.name}: $damage damage.$tags  [Press: ${pressIcons()}]"
+
+  checkBattleEnd()
+  advanceActor()
+
+
+// Healing is intentionally plain: one icon, no crit, no weakness interaction.
+// It buys survival, never tempo — the Press Turn bonuses belong to offense.
+//
+// `amount` is recomputed from the HP actually restored so the log cannot
+// promise 80 HP on a target that was 10 short of full.
+function resolveHealSkill(actorId, targetId, skillId)
+  var actor = getActor(actorId)
+  var target = getActor(targetId)
+  var skill = getSkill(skillId)
+
+  if actor == null || target == null || skill == null
+    battleLog = "Invalid healing action."
+    return
+
+  if !actor.alive || !target.alive
+    battleLog = "The action has no living target."
+    return
+
+  if actor.mp < skill.mp
+    battleLog = "${actor.name} does not have enough MP."
+    return
+
+  actor.mp -= skill.mp
+
+  var amount = round(skill.power + actor.mag * combatRules.healMagScale)
+  var before = target.hp
+
+  target.hp = min(target.maxHp, target.hp + amount)
+  amount = target.hp - before
+
+  applyPressResult("normal")
+
+  battleLog = "${actor.name} uses ${skill.name}: ${target.name} recovers $amount HP.  [Press: ${pressIcons()}]"
+
+  advanceActor()
+
+
+// Buff/debuff costs one icon and produces no damage. Its payoff is deferred:
+// a Sukukaja cast now changes turn order and hit rates for the rest of the
+// fight, which is the trade the player is being asked to price.
+function resolveStageSkill(actorId, targetId, skillId)
+  var actor = getActor(actorId)
+  var target = getActor(targetId)
+  var skill = getSkill(skillId)
+
+  if actor == null || target == null || skill == null
+    battleLog = "Invalid stage action."
+    return
+
+  if !actor.alive || !target.alive
+    battleLog = "The action has no living target."
+    return
+
+  if actor.mp < skill.mp
+    battleLog = "${actor.name} does not have enough MP."
+    return
+
+  actor.mp -= skill.mp
+
+  applyStage(target, skill.stat, skill.stages)
+  applyPressResult("normal")
+
+  battleLog = "${actor.name} uses ${skill.name} on ${target.name}: ${skill.stat} stage ${skill.stages > 0 ? "+" : ""}${skill.stages}.  [Press: ${pressIcons()}]"
+
+  advanceActor()
+
+
+// Dispatch by `kind`. Adding a new skill category means adding a `resolve...`
+// function and one branch here — the UI, the AI and the press economy pick it
+// up for free.
+function performSkill(actorId, targetId, skillId)
+  var skill = getSkill(skillId)
+
+  if skill == null
+    battleLog = "Unknown skill: $skillId"
+    return
+
+  if skill.kind == "damage"
+    resolveDamageSkill(actorId, targetId, skillId)
+
+  else if skill.kind == "heal"
+    resolveHealSkill(actorId, targetId, skillId)
+
+  else if skill.kind == "stage"
+    resolveStageSkill(actorId, targetId, skillId)
+
+  else
+    battleLog = "Unsupported skill kind: ${skill.kind}"
+
+
+// PASS is a first-class action, not a forfeit: it costs only a half icon and
+// moves the spend to the next actor in AGI order, which is how a side gets its
+// best-matched member to act twice in a row.
+function performPass()
+  var actor = currentActor()
+
+  if actor == null
+    return
+
+  consumePass()
+
+  battleLog = "${actor.name} PASSES.  [Press: ${pressIcons()}]"
+
+  advanceActor()

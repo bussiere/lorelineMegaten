@@ -1,0 +1,142 @@
+// ============================================================================
+// PRESS TURN CORE
+// ============================================================================
+//
+// FULL icon = ●
+// HALF/flashing icon = ◐
+//
+// Weak / Crit : FULL -> HALF. If there is no FULL icon left, consume HALF.
+// Normal      : consume one icon.
+// Resist      : consume one icon.
+// Pass        : consume HALF first, otherwise FULL -> HALF.
+// Miss / Null : consume two icons.
+// Repel/Drain : destroy every remaining icon.
+//
+// DESIGN INTENT
+// The whole battle is an economy of *icons*, not of individual turns: a side
+// opens with one FULL icon per living member, then spends them in any order it
+// likes. That single choice is what makes the fight a puzzle rather than a
+// damage race:
+//
+//   - Hitting a weakness downgrades a FULL icon into a HALF instead of
+//     spending it, so a perfect read gives the side roughly twice the actions.
+//     It is a *discount*, never a free extra icon: chaining weaknesses cannot
+//     grow the pool, it can only stretch it.
+//   - A HALF icon buys a whole action but is spent first, so the bonus decays
+//     unless the side keeps reading the enemy correctly.
+//   - Guessing wrong is punished on the same axis it rewards: MISS and NULL
+//     burn two icons, REPEL and DRAIN wipe the side's entire remaining turn.
+//     One careless elemental probe can end a full round of four actions.
+//
+// Because the pool is shared, losing a member shrinks next round's icon count:
+// the side that is losing also acts less often. The snowball is intentional —
+// it is what makes an ambush (see `resolveInitiative`) genuinely dangerous.
+// Repel/Drain : destroy every remaining icon.
+//
+
+// The side keeps acting while any icon of either kind remains; the combat
+// router (`scenes/combat_flow.lor`) polls this to know when to hand over.
+function hasPressTurns()
+  return pressFull > 0 || pressHalf > 0
+
+
+function pressIconCount()
+  return pressFull + pressHalf
+
+
+// HALF icons are printed first because they are also spent first — the string
+// reads left-to-right in the exact order the icons will be consumed.
+function pressIcons()
+  var text = ""
+
+  for i in 0...pressHalf
+    text += "◐ "
+
+  for i in 0...pressFull
+    text += "● "
+
+  if text == ""
+    return "∅"
+
+  return text.trim()
+
+
+// Spending order is always HALF before FULL. A weakness bonus is therefore
+// short-lived: it must be re-earned every action or it evaporates.
+function consumeOneIcon()
+  if pressHalf > 0
+    pressHalf -= 1
+  else if pressFull > 0
+    pressFull -= 1
+
+
+// The double cost of MISS/NULL is capped by what the side actually owns: a
+// blunder on the last icon ends the turn, it never carries a debt into the
+// next round.
+function consumeTwoIcons()
+  consumeOneIcon()
+
+  if hasPressTurns()
+    consumeOneIcon()
+
+
+// Weakness / critical reward. Downgrading FULL -> HALF keeps the icon *count*
+// identical while halving its value, so the side gains actions, never turns.
+// With no FULL left, the reward degenerates into a plain HALF spend: the bonus
+// cannot chain forever off a single icon.
+function rewardHalfTurn()
+  if pressFull > 0
+    pressFull -= 1
+    pressHalf += 1
+  else if pressHalf > 0
+    pressHalf -= 1
+
+
+// PASS is the tactical tool of the system: it costs only a HALF icon (or
+// downgrades a FULL one) to skip an ill-placed actor and let a better-matched
+// ally act twice. It buys turn order at a discount, which is why it can never
+// be free — a free pass would let a side reshuffle indefinitely.
+function consumePass()
+  if pressHalf > 0
+    pressHalf -= 1
+  else if pressFull > 0
+    pressFull -= 1
+    pressHalf += 1
+
+
+// Single funnel from combat outcome to action economy. Every resolution path
+// in `engine/combat.lor` ends here, so the icon rules stay in one place and a
+// new outcome cannot silently forget to charge for itself.
+//
+// The `default` branch charges one icon: an unknown outcome degrades to a
+// normal hit rather than granting a free action.
+function applyPressResult(result)
+  switch result
+    case "weak"
+      rewardHalfTurn()
+
+    case "crit"
+      rewardHalfTurn()
+
+    case "normal"
+      consumeOneIcon()
+
+    case "resist"
+      consumeOneIcon()
+
+    case "miss"
+      consumeTwoIcons()
+
+    case "null"
+      consumeTwoIcons()
+
+    case "repel"
+      pressFull = 0
+      pressHalf = 0
+
+    case "drain"
+      pressFull = 0
+      pressHalf = 0
+
+    default
+      consumeOneIcon()

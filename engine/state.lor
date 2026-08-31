@@ -1,0 +1,90 @@
+// ============================================================================
+// GLOBAL ENGINE STATE
+// ============================================================================
+//
+// One battle at a time, held in globals rather than in a battle object: the
+// Loreline scene layer can only call functions and read state, so every value
+// a `choice` label or a beat condition needs must be reachable without an
+// argument. `resetBattleRuntime()` in engine/combat.lor is the single place
+// that clears all of it — a field added here must be cleared there too, or it
+// leaks from one encounter into the next.
+//
+// Databases are loaded once at boot (data/registry.lor); everything below them
+// is per-battle runtime.
+
+state
+  // Databases
+  combatRules: {}
+  skillDb: {}
+  actorDb: {}
+  encounterDb: {}
+
+  // Runtime teams. Slot order in these arrays IS the UI slot order shown in
+  // scenes/combat_flow.lor, and an encounter's `commanderSlot` indexes into
+  // `enemies` — so a fallen actor is never removed, only flagged dead.
+
+  // Runtime teams
+  party: []
+  enemies: []
+
+  playerOrder: []
+  enemyOrder: []
+
+  // Press Turn runtime. The icon pool belongs to the *side*, not to an actor:
+  // `actorIndex` merely says who is offered the next spend, and PASS lets the
+  // side hand that spend to somebody else.
+
+  // Press Turn runtime
+  currentSide: "player"
+  actorIndex: 0
+  pressFull: 0
+  pressHalf: 0
+
+  // Battle runtime. `battleEndReason` is what the epilogue reads to tell a
+  // Commander kill apart from an ordinary wipe — the two pay out differently.
+
+  // Battle runtime
+  roundNumber: 1
+  battleEnded: false
+  victor: ""
+  battleEndReason: ""
+
+  currentEncounterId: ""
+  initiativeLog: ""
+  battleLog: ""
+
+  // Commander runtime, captured at the instant of the killing blow: the
+  // Commander's HP is deliberately left negative and the Overkill reward is
+  // computed from exactly how far past zero it went.
+
+  // Commander runtime
+  commanderId: ""
+  commanderWasKilled: false
+  commanderHpBeforeFinalHit: 0
+  commanderFinalHp: 0
+  commanderFinalHitDamage: 0
+  commanderOverkillRawPercent: 0
+  commanderOverkillPercent: 0
+
+  // Rewards, split into base (enemies actually killed) and Overkill bonus so
+  // the epilogue can show the player *why* the payout is what it is.
+
+  // Rewards
+  defeatedEnemyXp: 0
+  defeatedEnemyReward: 0
+  overkillXpBonus: 0
+  overkillRewardBonus: 0
+  totalXpReward: 0
+  totalCurrencyReward: 0
+
+  // Contournement : ce build de loreline.jar plafonne les fonctions a 3 parametres.
+  // Le 4e argument de calculateDamage / calculateCritChance passe par ces drapeaux.
+  calcIsCritical: false
+  calcSmirkAttack: false
+
+  // Player UI. Skill and target are picked in two separate beats, so the first
+  // choice has to survive until the second one resolves it.
+
+  // Player UI
+  selectedSkill: ""
+  selectedTargetId: ""

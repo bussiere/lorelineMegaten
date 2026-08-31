@@ -1,0 +1,256 @@
+// ============================================================================
+// ACTOR DATABASE
+// ============================================================================
+//
+// xpValue/rewardValue are earned ONLY if this enemy is actually defeated.
+// If the Commander dies first, surviving minions immediately stop mattering
+// and contribute 0 reward.
+//
+
+// Template fields: hp/mp are also the maxima at spawn; str feeds `phys`
+// damage, mag everything else plus healing; agi drives turn order AND accuracy;
+// luck only shifts critical rate. `skills` is the actor's whole move list, in
+// the order the UI slots (and the AI's heal search) will read it.
+//
+// The `affinity` map is the real character sheet: it is what the opposing side
+// must read to earn extra actions, and what it must avoid to keep its own.
+//
+
+
+function loadActorDatabase()
+  actorDb = {
+    // THE PARTY — designed as a coverage puzzle rather than four damage
+    // dealers. Between them they carry six of the seven elements, and each one
+    // is a liability against something, so no single formation answers every
+    // encounter.
+    //
+    // Hunter: the human, all-normal affinities and the widest skill list. No
+    // weakness to exploit and no resistance to hide behind — the safe answer
+    // when the enemy's elements are unknown.
+    hunter: {
+      name: "Hunter",
+      hp: 220,
+      mp: 90,
+      str: 44,
+      mag: 48,
+      agi: 52,
+      luck: 35,
+      xpValue: 0,
+      rewardValue: 0,
+      ai: "smart",
+      skills: ["attack", "heavy_strike", "agi", "zio", "mudo", "tarukaja", "sukunda"],
+      affinity: {
+        phys: "normal",
+        fire: "normal",
+        ice: "normal",
+        elec: "normal",
+        force: "normal",
+        light: "normal",
+        dark: "normal"
+      }
+    },
+
+    // Pixie: fastest actor in the game (acts first, hardest to hit), and the
+    // party's only elec DRAIN — an enemy that leads with Zio heals her and
+    // loses its whole turn. Paid for in paper HP and a dark weakness.
+    pixie: {
+      name: "Pixie",
+      hp: 145,
+      mp: 115,
+      str: 22,
+      mag: 50,
+      agi: 68,
+      luck: 46,
+      xpValue: 0,
+      rewardValue: 0,
+      ai: "smart",
+      skills: ["attack", "zio", "hama", "dia", "sukukaja"],
+      affinity: {
+        phys: "normal",
+        fire: "normal",
+        ice: "normal",
+        elec: "drain",
+        force: "resist",
+        light: "normal",
+        dark: "weak"
+      }
+    },
+
+    // Jack Frost: ice drain / fire weakness, the textbook double-edge. He is
+    // also the second healer, so losing him to a fire spell costs the party
+    // both sustain and its ice answer.
+    jack_frost: {
+      name: "Jack Frost",
+      hp: 175,
+      mp: 100,
+      str: 28,
+      mag: 54,
+      agi: 45,
+      luck: 38,
+      xpValue: 0,
+      rewardValue: 0,
+      ai: "smart",
+      skills: ["attack", "bufu", "dia", "rakukaja"],
+      affinity: {
+        phys: "normal",
+        fire: "weak",
+        ice: "drain",
+        elec: "normal",
+        force: "normal",
+        light: "normal",
+        dark: "normal"
+      }
+    },
+
+    // Oni: the wall. Highest HP and STR, physical resistance, but the worst
+    // AGI in the party (acts last, misses more) and an elec weakness the enemy
+    // AI will find immediately. Almost no MP: he is meant to swing, not cast.
+    oni: {
+      name: "Oni",
+      hp: 260,
+      mp: 50,
+      str: 62,
+      mag: 18,
+      agi: 30,
+      luck: 42,
+      xpValue: 0,
+      rewardValue: 0,
+      ai: "smart",
+      skills: ["attack", "heavy_strike", "tarukaja"],
+      affinity: {
+        phys: "resist",
+        fire: "normal",
+        ice: "normal",
+        elec: "weak",
+        force: "normal",
+        light: "normal",
+        dark: "normal"
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // ENEMY TEMPLATES
+    // -----------------------------------------------------------------------
+
+    // ENCOUNTER 1 — the Commander squad. A textbook read of the mechanic:
+    //
+    // The Commander is a 500 HP wall, weak to ICE (Jack Frost's Bufu) and
+    // resistant to force, and holds 220 XP / 160 currency — more than both
+    // minions combined. Killing it ends the battle instantly, so the encounter
+    // asks a real question: clear the escort first for the guaranteed 190 XP,
+    // or race the boss and forfeit it?
+    //
+    // Both escorts are deliberately fragile and worth real money, so the greedy
+    // line is genuinely tempting — and genuinely riskier, since three enemies
+    // means three enemy icons per round instead of one.
+    goblin_commander: {
+      name: "Goblin Commander",
+      hp: 500,
+      mp: 80,
+      str: 48,
+      mag: 35,
+      agi: 40,
+      luck: 32,
+      xpValue: 220,
+      rewardValue: 160,
+      ai: "smart",
+      skills: ["attack", "heavy_strike", "agi", "tarukaja"],
+      affinity: {
+        phys: "normal",
+        fire: "normal",
+        ice: "weak",
+        elec: "normal",
+        force: "resist",
+        light: "normal",
+        dark: "normal"
+      }
+    },
+
+    // Escort A — a body, nothing else: one skill, no MP, elec weakness. Its
+    // job is to add an enemy icon each round and to die profitably.
+    goblin_soldier: {
+      name: "Goblin Soldier",
+      hp: 170,
+      mp: 35,
+      str: 42,
+      mag: 18,
+      agi: 34,
+      luck: 24,
+      xpValue: 80,
+      rewardValue: 55,
+      ai: "smart",
+      skills: ["attack"],
+      affinity: {
+        phys: "normal",
+        fire: "normal",
+        ice: "normal",
+        elec: "weak",
+        force: "normal",
+        light: "normal",
+        dark: "normal"
+      }
+    },
+
+    // Escort B — the reason to kill the escort first. It has Dia, so it will
+    // heal the Commander back over the 45% threshold and stretch the fight;
+    // weak to force, so the party can remove it fast if it chooses to.
+    goblin_mage: {
+      name: "Goblin Mage",
+      hp: 130,
+      mp: 90,
+      str: 20,
+      mag: 52,
+      agi: 46,
+      luck: 30,
+      xpValue: 110,
+      rewardValue: 70,
+      ai: "smart",
+      skills: ["attack", "agi", "zio", "dia"],
+      affinity: {
+        phys: "normal",
+        fire: "resist",
+        ice: "normal",
+        elec: "normal",
+        force: "weak",
+        light: "normal",
+        dark: "normal"
+      }
+    },
+
+    // ENCOUNTER 2 — the solo boss, and the stress test of the icon economy.
+    //
+    // Alone, Nue would get one icon per round against the party's four; the
+    // encounter grants it `enemyBonusPress: 2` instead of inflating its stats.
+    // Its defenses do the rest: phys NULL (two icons burned) and elec DRAIN
+    // (whole turn destroyed, boss healed) punish the party's two most reflexive
+    // openers, Oni's Attack and Pixie's Zio.
+    //
+    // The single force weakness is the intended answer, but note that NO party
+    // template above currently carries Zan: as shipped, this fight has no
+    // weakness the player can actually hit, so it plays as a long grind on
+    // fire/ice/light/dark while dodging the two punishing elements. Give one
+    // party member `zan` (or hand Nue a weakness the roster covers) to restore
+    // the intended read-and-exploit loop.
+    nue: {
+      name: "Nue",
+      hp: 650,
+      mp: 120,
+      str: 48,
+      mag: 50,
+      agi: 42,
+      luck: 36,
+      xpValue: 350,
+      rewardValue: 250,
+      ai: "smart",
+      skills: ["attack", "heavy_strike", "zio", "zan", "sukunda"],
+      affinity: {
+        phys: "null",
+        fire: "normal",
+        ice: "normal",
+        elec: "drain",
+        force: "weak",
+        light: "normal",
+        dark: "normal"
+      }
+    }
+  }

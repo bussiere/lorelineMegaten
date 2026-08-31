@@ -1,0 +1,17 @@
+// ============================================================================
+// DATABASE REGISTRY
+// ============================================================================
+
+//
+// One boot call for every content database, invoked from `beat Start` before
+// any encounter. Order is free — the databases do not reference each other,
+// they are only cross-referenced at runtime by id (an encounter names actor
+// templates, a template names skill ids).
+//
+
+
+function initializeDatabases()
+  loadCombatRules()
+  loadSkillDatabase()
+  loadActorDatabase()
+  loadEncounterDatabase()
