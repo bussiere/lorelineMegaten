@@ -1,0 +1,21 @@
+// ============================================================================
+// SCORE SCREEN
+// ============================================================================
+//
+// Shown after the reward summary, as the last thing the player reads. The order
+// matters: rewards answer "what did I get", the score answers "how well did I
+// play", and only the second one is worth staring at before restarting.
+//
+// The screen itself is pure presentation — every number and every line of art
+// comes from engine/score.lor, so a new tier or a new component never touches
+// this file.
+
+beat ScoreScreen
+  $scoreScreen()
+
+  choice
+    Restart menu
+      -> Start
+
+    End
+      -> .

@@ -35,47 +35,46 @@ beat CombatRouter
 // HP, buff stages and the remaining icons at the moment of the decision.
 //
 // The 8 skill lines are static — a Loreline `choice` cannot be generated from
-// an array — so each is guarded by `currentSkillExists(n)` and simply
-// disappears for an actor with fewer skills.
+// an array — so each is guarded by `currentSkillExists(n)` and greys out for an
+// actor with fewer skills. Each line interpolates `currentSkillLabel(n)`, so
+// the menu reads "Bufu — 4 MP", never "Skill 2": the player picks by name and
+// price, which is the information the decision actually needs.
 
 beat PlayerTurn
   $battlefieldStatus()
 
   $turnHeader()
 
-  Available skills:
-  $currentSkillList()
-
   choice
-    Skill 1 if currentSkillExists(0)
+    $currentSkillLabel(0) if currentSkillExists(0)
       selectCurrentSkillSlot(0)
       -> SkillSelected
 
-    Skill 2 if currentSkillExists(1)
+    $currentSkillLabel(1) if currentSkillExists(1)
       selectCurrentSkillSlot(1)
       -> SkillSelected
 
-    Skill 3 if currentSkillExists(2)
+    $currentSkillLabel(2) if currentSkillExists(2)
       selectCurrentSkillSlot(2)
       -> SkillSelected
 
-    Skill 4 if currentSkillExists(3)
+    $currentSkillLabel(3) if currentSkillExists(3)
       selectCurrentSkillSlot(3)
       -> SkillSelected
 
-    Skill 5 if currentSkillExists(4)
+    $currentSkillLabel(4) if currentSkillExists(4)
       selectCurrentSkillSlot(4)
       -> SkillSelected
 
-    Skill 6 if currentSkillExists(5)
+    $currentSkillLabel(5) if currentSkillExists(5)
       selectCurrentSkillSlot(5)
       -> SkillSelected
 
-    Skill 7 if currentSkillExists(6)
+    $currentSkillLabel(6) if currentSkillExists(6)
       selectCurrentSkillSlot(6)
       -> SkillSelected
 
-    Skill 8 if currentSkillExists(7)
+    $currentSkillLabel(7) if currentSkillExists(7)
       selectCurrentSkillSlot(7)
       -> SkillSelected
 
@@ -195,6 +194,10 @@ beat EnemyTurn
 // Commander kill is announced differently from an ordinary wipe, and the reward
 // summary spells out base XP, Overkill percentage and bonus separately so the
 // player can see which of their choices produced the number.
+//
+// It hands over to `beat ScoreScreen` (scenes/score_screen.lor) rather than
+// ending here: rewards are what the battle paid, the score is how it was won,
+// and the second is the one the player should be left looking at.
 
 beat BattleEnd
   if victor == "player"
@@ -215,9 +218,4 @@ beat BattleEnd
   Final state:
   $battlefieldStatus()
 
-  choice
-    Restart menu
-      -> Start
-
-    End
-      -> .
+  -> ScoreScreen

@@ -1,0 +1,347 @@
+// ============================================================================
+// END-OF-BATTLE SCORE
+// ============================================================================
+//
+// WHAT THE SCORE IS FOR
+//
+// Rewards (engine/rewards.lor) pay the player for the outcome; the score judges
+// the PERFORMANCE. The two deliberately pull in different directions, and that
+// tension is the point:
+//
+//   - Rewards say "kill the Commander now, the escort is optional".
+//   - The score says "an escort left standing is an unfinished job".
+//
+// So the five components below price the things the Press Turn system is
+// actually about — reading the enemy, spending icons well, and finishing on
+// your own terms:
+//
+//   COMMANDER DAMAGE  did you fight the Commander, or win by accident?
+//   OVERKILL          how far past zero the killing blow went. This is the
+//                     setup score: buffs, a weakness and a Smirk on the
+//                     finisher are what push it up.
+//   SPEED             rounds used. Every extra round means the enemy side got
+//                     another full pool of icons, so a slow win is a worse win.
+//   SURVIVAL          damage the party took, against its total HP. A clean
+//                     fight is one where the reads were right the first time.
+//   COMMANDER LAST    the completionist bonus: every minion down BEFORE the
+//                     Commander. It is the only component that pays for the
+//                     line the reward system punishes, which is what makes the
+//                     "rush or clear" decision a real one.
+//
+// All the weights live in data/rules.lor — nothing is tuned here.
+
+function resetScore()
+  commanderDamageDealt = 0
+  partyDamageTaken = 0
+  commanderKeptForLast = false
+  roundsUsed = 0
+
+  scoreCommanderDamage = 0
+  scoreOverkill = 0
+  scoreSpeed = 0
+  scoreSurvival = 0
+  scoreCommanderLast = 0
+
+  scoreTotal = 0
+  scoreRank = ""
+
+
+// Called by engine/combat.lor for every point of damage that actually lands,
+// including the overshoot of a killing blow and damage a REPEL sends back at
+// its own caster. Healing is not subtracted: the score measures what the fight
+// cost, not what was left of it at the end.
+function noteDamage(target, amount)
+  if target == null || amount <= 0
+    return
+
+  if target.team == "player"
+    partyDamageTaken += amount
+
+  else if isCommander(target)
+    commanderDamageDealt += amount
+
+
+// Recorded at the instant the Commander dies, because that is the only moment
+// the question makes sense: an escort killed afterwards would not count, and
+// the battle stops there anyway.
+function noteCommanderKillOrder()
+  commanderKeptForLast = countAliveNonCommanderEnemies() == 0
+
+
+function partyTotalMaxHp()
+  var total = 0
+
+  for actor in party
+    total += actor.maxHp
+
+  return total
+
+
+function finalizeScore()
+  roundsUsed = roundNumber
+
+  var boss = commander()
+
+  // Capped at the Commander's full HP bar: the overshoot is already paid for by
+  // the Overkill component, and paying it twice would make one huge finisher
+  // outweigh the whole fight.
+  if boss != null && boss.maxHp > 0
+    var share = min(1, commanderDamageDealt / boss.maxHp)
+    scoreCommanderDamage = round(share * combatRules.scoreCommanderDamagePoints)
+
+  scoreOverkill = round(commanderOverkillPercent / 100 * combatRules.scoreOverkillPoints)
+
+  // Speed and the completionist bonus are victory-only: rewarding a fast defeat
+  // would tell the player to give up quickly.
+  if victor == "player"
+    scoreSpeed = max(
+      0,
+      combatRules.scoreSpeedBase - (roundsUsed - 1) * combatRules.scoreSpeedPenaltyPerRound
+    )
+
+    if commanderKeptForLast
+      scoreCommanderLast = combatRules.scoreCommanderLastBonus
+
+  var pool = partyTotalMaxHp()
+
+  if pool > 0
+    var intact = max(0, 1 - partyDamageTaken / pool)
+    scoreSurvival = round(intact * combatRules.scoreSurvivalPoints)
+
+  scoreTotal = scoreCommanderDamage + scoreOverkill + scoreSpeed + scoreSurvival + scoreCommanderLast
+  scoreRank = rankFor(scoreTotal)
+
+
+function rankFor(total)
+  if total >= combatRules.scoreRankS
+    return "S"
+
+  if total >= combatRules.scoreRankA
+    return "A"
+
+  if total >= combatRules.scoreRankB
+    return "B"
+
+  if total >= combatRules.scoreRankC
+    return "C"
+
+  return "D"
+
+
+function rankTitle(rank)
+  switch rank
+    case "S"
+      return "FLAWLESS COMMAND"
+
+    case "A"
+      return "COMMANDER BROKEN"
+
+    case "B"
+      return "OBJECTIVE MET"
+
+    case "C"
+      return "MESSY VICTORY"
+
+    default
+      return "BARELY STANDING"
+
+
+// The tier is also spelled in the game's own currency: one Press Turn icon per
+// rank, full icons for the good ranks and a flashing one for the worst. A
+// player who has spent the whole fight reading that row of icons reads the
+// verdict before the letter.
+function rankIcons(rank)
+  switch rank
+    case "S"
+      return "● ● ● ● ●"
+
+    case "A"
+      return "● ● ● ●"
+
+    case "B"
+      return "● ● ●"
+
+    case "C"
+      return "● ●"
+
+    default
+      return "◐"
+
+
+// ----------------------------------------------------------------------------
+// LAYOUT
+// ----------------------------------------------------------------------------
+//
+// ⚠️ THE READER IS NOT MONOSPACED. Loreline renders narration in the host's UI
+// font, so anything whose alignment depends on the width of a space falls apart
+// on screen — verified in Loreline Writer, where a "#"-and-spaces letter
+// collapsed into rubble and a box drawn with "|" borders came out as a
+// staircase.
+//
+// Two rules follow, and the whole layout below obeys them:
+//
+//   1. ART IS DRAWN WITH BLOCK GLYPHS ONLY — "█" for ink, "░" for background,
+//      never a space. Both come from the same Unicode block and are drawn on
+//      the same advance width in every font tested, so a letter keeps its shape
+//      where "#" and " " do not.
+//   2. TABLES USE DOT LEADERS, NOT COLUMNS — "Overkill ....... 14% -> 42 pts"
+//      reads as a table in any font, because nothing has to line up: the eye
+//      follows the dots. No right border, no padded columns, nothing to shatter.
+//
+// In a monospaced terminal (tools/Play.java, ./run.sh) both still line up
+// exactly, so the screen looks deliberate in either place.
+
+function spaces(count)
+  var text = ""
+
+  for i in 0...count
+    text += " "
+
+  return text
+
+
+function repeated(pattern, count)
+  var text = ""
+
+  for i in 0...count
+    text += pattern
+
+  return text
+
+
+function padLeft(value, width)
+  var text = "${value}"
+  var missing = width - text.length()
+
+  if missing <= 0
+    return text
+
+  return spaces(missing) + text
+
+
+function rule()
+  return repeated("=", 42)
+
+
+function innerRule()
+  return repeated("-", 42)
+
+
+// "Label ......... " — the leader is what replaces column alignment.
+function dotted(label, width)
+  var text = "${label} "
+  var missing = width - text.length()
+
+  if missing > 0
+    text += repeated(".", missing)
+
+  return text
+
+
+// One breakdown row: what was measured, what it was worth, what it bought.
+function scoreRow(label, value, points)
+  return dotted(label, 26) + " ${value} -> ${points} pts"
+
+
+// Block letters, 5 rows of exactly 7 cells, every cell a block glyph. A space
+// anywhere in here would collapse the shape in the reader's proportional font —
+// that is the whole reason the background is "░" and not " ".
+function rankLetter(rank)
+  var lines = []
+
+  switch rank
+    case "S"
+      lines.add("░█████░")
+      lines.add("██░░░░░")
+      lines.add("░█████░")
+      lines.add("░░░░░██")
+      lines.add("░█████░")
+
+    case "A"
+      lines.add("░░███░░")
+      lines.add("░██░██░")
+      lines.add("██░░░██")
+      lines.add("███████")
+      lines.add("██░░░██")
+
+    case "B"
+      lines.add("██████░")
+      lines.add("██░░░██")
+      lines.add("██████░")
+      lines.add("██░░░██")
+      lines.add("██████░")
+
+    case "C"
+      lines.add("░█████░")
+      lines.add("██░░░██")
+      lines.add("██░░░░░")
+      lines.add("██░░░██")
+      lines.add("░█████░")
+
+    default
+      lines.add("██████░")
+      lines.add("██░░░██")
+      lines.add("██░░░██")
+      lines.add("██░░░██")
+      lines.add("██████░")
+
+  return lines
+
+
+function scoreArt()
+  var lines = []
+
+  lines.add(rule())
+  lines.add("BATTLE RECORD")
+  lines.add(rule())
+  lines.add("")
+
+  for row in rankLetter(scoreRank)
+    lines.add(row)
+
+  lines.add("")
+  lines.add(rankIcons(scoreRank))
+  lines.add("RANK ${scoreRank} - ${rankTitle(scoreRank)}")
+
+  return lines.join("\n")
+
+
+function scoreBreakdown()
+  var boss = commander()
+  var bossName = boss == null ? "Commander" : boss.name
+  var bossMax = boss == null ? 0 : boss.maxHp
+
+  var lines = []
+
+  lines.add(innerRule())
+
+  // The target gets its own line: folding its name into the first label would
+  // eat the dot leader on the one row where the numbers matter most.
+  lines.add(bossName)
+  lines.add(innerRule())
+
+  // Damage can exceed the bar — the Goblin Mage heals its Commander, and the
+  // killing blow's overshoot counts too — so the bar is shown beside the total
+  // rather than as a denominator.
+  lines.add(scoreRow("Damage dealt", "${round(commanderDamageDealt)}/${bossMax}", scoreCommanderDamage))
+  lines.add(scoreRow("Overkill", "${round(commanderOverkillPercent * 10) / 10}%", scoreOverkill))
+  lines.add(scoreRow("Rounds used", "${roundsUsed}", scoreSpeed))
+  lines.add(scoreRow("Party damage taken", "${round(partyDamageTaken)}/${partyTotalMaxHp()}", scoreSurvival))
+  lines.add(scoreRow("Commander kept for last", commanderKeptForLast ? "yes" : "no", scoreCommanderLast))
+
+  lines.add(innerRule())
+  lines.add(dotted("TOTAL", 26) + " ${scoreTotal} pts - RANK ${scoreRank}")
+  lines.add(rule())
+
+  return lines.join("\n")
+
+
+// The whole panel in one go, and the only entry point the scene should use.
+//
+// ⚠️ It opens with an empty line on purpose. A narration line in a beat is
+// indented, and Loreline prefixes the FIRST line of an interpolated block with
+// that indentation — which would push the top rule two columns right of every
+// other line. Starting on an empty line gives the stray indentation somewhere
+// harmless to land, and doubles as breathing room above the panel.
+function scoreScreen()
+  return "\n" + scoreArt() + "\n" + scoreBreakdown()

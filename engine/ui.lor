@@ -92,9 +92,29 @@ function currentSkillExists(slot)
   return currentSkillId(slot) != ""
 
 
-// Enabled = the skill exists AND is affordable right now. A greyed-out entry
-// still shows its name and cost, so an unaffordable skill teaches the player
-// what to save MP for.
+// The type tag shown in the menu, in parentheses after the name.
+//
+// For a damage skill this is the ELEMENT, which is the only thing the player
+// actually decides with: every elemental spell here costs the same and hits for
+// the same power, so "Bufu (ice)" versus "Zio (elec)" is the whole choice.
+// Support skills have no element, so they announce what they do instead —
+// "heal", or "buff"/"debuff" for the two directions of a stage skill.
+function skillTypeTag(skill)
+  if skill == null
+    return ""
+
+  if skill.has("element")
+    return skill.element
+
+  if skill.kind == "stage"
+    return skill.stages > 0 ? "buff" : "debuff"
+
+  return skill.kind
+
+
+// Enabled = the skill exists AND is affordable right now. An unaffordable
+// skill keeps its line in the menu, name and cost included, so the player can
+// see what to save MP for instead of wondering what disappeared.
 function currentSkillEnabled(slot)
   var id = currentSkillId(slot)
 
@@ -118,9 +138,12 @@ function currentSkillLabel(slot)
   var actor = currentActor()
   var suffix = actor.mp >= skill.mp ? "" : " [NO MP]"
 
-  return "${slot + 1}. ${skill.name} — ${skill.mp} MP$suffix"
+  return "${skill.name} (${skillTypeTag(skill)}) — ${skill.mp} MP$suffix"
 
 
+// Numbered read-out of the whole move list. The text shell no longer prints it
+// (the choice menu already names every skill); it stays as the one-call HUD
+// block for a richer front-end.
 function currentSkillList()
   var actor = currentActor()
 
@@ -130,7 +153,7 @@ function currentSkillList()
   var lines = []
 
   for i in 0...actor.skills.length()
-    lines.add(currentSkillLabel(i))
+    lines.add("${i + 1}. " + currentSkillLabel(i))
 
   return lines.join("\n")
 

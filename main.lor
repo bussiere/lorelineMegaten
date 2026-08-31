@@ -22,6 +22,7 @@ import engine/press_turn
 import engine/actors
 import engine/skills
 import engine/rewards
+import engine/score
 import engine/combat
 import engine/ai
 import engine/ui
@@ -33,6 +34,7 @@ import data/encounters
 import data/registry
 
 import scenes/combat_flow
+import scenes/score_screen
 
 
 // Boot: load the content databases, then let the player pick a demo.

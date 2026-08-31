@@ -46,6 +46,7 @@ function resetBattleRuntime()
   selectedTargetId = ""
 
   resetRewards()
+  resetScore()
 
 
 // The Commander is designated by array slot in the encounter data, then
@@ -170,6 +171,7 @@ function endBattleAsPlayerVictory(reason)
 
   // The moment Commander dies, no surviving minion is converted into reward.
   finalizeRewards()
+  finalizeScore()
 
 
 function endBattleAsEnemyVictory(reason)
@@ -178,6 +180,7 @@ function endBattleAsEnemyVictory(reason)
   battleEndReason = reason
 
   finalizeRewards()
+  finalizeScore()
 
 
 // Checked between every action (and again by the CombatRouter beat). The order
@@ -227,6 +230,10 @@ function applyFatalCheck(target, hpBeforeHit, finalHitDamage)
     if isCommander(target)
       // Preserve the Commander's negative final HP exactly.
       registerCommanderKill(target, hpBeforeHit, finalHitDamage)
+
+      // Only true right now: an escort killed later cannot count, and the
+      // battle stops on this line anyway.
+      noteCommanderKillOrder()
 
       // Immediate victory: no extra action, no second hit, no surviving-minion
       // reward. CombatRouter will jump directly to BattleEnd.
@@ -314,6 +321,7 @@ function resolveDamageSkill(actorId, targetId, skillId)
     var actorHpBefore = actor.hp
 
     actor.hp -= damage
+    noteDamage(actor, damage)
 
     applyPressResult("repel")
 
@@ -354,6 +362,7 @@ function resolveDamageSkill(actorId, targetId, skillId)
   var hpBeforeHit = target.hp
 
   target.hp -= damage
+  noteDamage(target, damage)
 
   var killed = applyFatalCheck(target, hpBeforeHit, damage)
 

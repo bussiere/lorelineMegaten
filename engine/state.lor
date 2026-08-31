@@ -77,6 +77,23 @@ state
   totalXpReward: 0
   totalCurrencyReward: 0
 
+  // Score, cf. engine/score.lor. Les trois premiers sont mesures pendant le
+  // combat (une seule occasion de les voir passer), les autres sont calcules a
+  // la fin.
+  commanderDamageDealt: 0
+  partyDamageTaken: 0
+  commanderKeptForLast: false
+  roundsUsed: 0
+
+  scoreCommanderDamage: 0
+  scoreOverkill: 0
+  scoreSpeed: 0
+  scoreSurvival: 0
+  scoreCommanderLast: 0
+
+  scoreTotal: 0
+  scoreRank: ""
+
   // Contournement : ce build de loreline.jar plafonne les fonctions a 3 parametres.
   // Le 4e argument de calculateDamage / calculateCritChance passe par ces drapeaux.
   calcIsCritical: false

@@ -109,6 +109,34 @@ function loadCombatRules()
     // these are the number of target lines and skill lines the scene actually
     // declares — raising them means adding matching lines in
     // scenes/combat_flow.lor, not just editing this number.
+    // -----------------------------------------------------------------------
+    // END-OF-BATTLE SCORE
+    // -----------------------------------------------------------------------
+    //
+    // Maximum is 1250: 200 + 300 + 300 + 200 + 250. The thresholds below sit
+    // where they do on purpose — S needs the Overkill AND the escort cleared
+    // AND a short fight, which no single strong play can buy on its own.
+    //
+    // Overkill is the biggest single component because it is the only one that
+    // cannot be brute-forced: it takes buffs, a weakness read and a Smirk saved
+    // for the finisher, all landing on the same blow.
+    scoreCommanderDamagePoints: 200,
+    scoreOverkillPoints: 300,
+
+    // 300 points at round 1, nothing left after round 8: the enemy side gets a
+    // fresh pool of icons every round, so a long fight is a fight you were
+    // losing control of.
+    scoreSpeedBase: 300,
+    scoreSpeedPenaltyPerRound: 40,
+
+    scoreSurvivalPoints: 200,
+    scoreCommanderLastBonus: 250,
+
+    scoreRankS: 900,
+    scoreRankA: 700,
+    scoreRankB: 500,
+    scoreRankC: 300,
+
     // Pure Loreline menu shell
     maxActiveMenuSlots: 4,
     maxSkillMenuSlots: 8

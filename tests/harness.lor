@@ -1,0 +1,709 @@
+// ============================================================================
+// TEST HARNESS — driven from Java (app/src/test/java/org/loreline/combat)
+// ============================================================================
+//
+// This script is not part of the game. It boots the same engine main.lor uses,
+// runs a series of deterministic scenarios against it, and records one line per
+// assertion into `testReport`:
+//
+//     name|expected|actual
+//
+// The Java side reads that field back through
+// `Interpreter.getTopLevelStateField("testReport")` and turns every line into a
+// JUnit assertion, so a rule that silently changes shows up as a named failure.
+//
+// WHY A .LOR HARNESS: the combat rules are Loreline functions, and the public
+// Java API can read and write state but cannot call a script function. Driving
+// the checks from inside the script is the only way to test the real engine
+// code rather than a Java re-implementation of it.
+//
+// DETERMINISM: several formulas roll dice. Groups that need exact numbers pin
+// the dice first through `combatRules` (variance 100..100 = always x1, hit
+// chance clamped to 100 = always hits, crit clamped to 0 = never crits) and
+// call `loadCombatRules()` afterwards to put the real tuning back.
+
+import ../engine/state
+import ../engine/press_turn
+import ../engine/actors
+import ../engine/skills
+import ../engine/rewards
+import ../engine/score
+import ../engine/combat
+import ../engine/ai
+import ../engine/ui
+
+import ../data/rules
+import ../data/skills
+import ../data/actors
+import ../data/encounters
+import ../data/registry
+
+
+state
+  testReport: ""
+  testSkillList: ""
+  testScoreArt: ""
+  testScoreBreakdown: ""
+  testScoreScreen: ""
+
+
+function check(name, expected, actual)
+  testReport = testReport + "${name}|${expected}|${actual}\n"
+
+
+function icons()
+  return "${pressFull}/${pressHalf}"
+
+
+// Freezes every die in the engine so a whole action resolves to one number:
+// damage variance x1, every attack hits, nothing crits, nobody earns Smirk.
+function pinTheDice()
+  loadCombatRules()
+
+  combatRules.damageVarianceMin = 100
+  combatRules.damageVarianceMax = 100
+
+  combatRules.baseHitChance = 100
+  combatRules.minHitChance = 100
+  combatRules.maxHitChance = 100
+
+  combatRules.minCritChance = 0
+  combatRules.maxCritChance = 0
+
+  combatRules.smirkFromWeakOrCrit = false
+  combatRules.smirkFromNull = false
+  combatRules.smirkFromRepel = false
+  combatRules.smirkFromDrain = false
+
+
+function orderNames(order)
+  var names = []
+
+  for id in order
+    names.add(getActor(id).name)
+
+  return names.join("/")
+
+
+// ----------------------------------------------------------------------------
+// PRESS TURN ECONOMY — the rules table of engine/press_turn.lor
+// ----------------------------------------------------------------------------
+
+function testPressEconomy()
+  pressFull = 3
+  pressHalf = 0
+  applyPressResult("normal")
+  check("press_normal_costs_one_icon", "2/0", icons())
+
+  pressFull = 3
+  pressHalf = 0
+  applyPressResult("resist")
+  check("press_resist_costs_one_icon", "2/0", icons())
+
+  // The whole point of the system: a weakness is a discount, not a free turn.
+  // Icon COUNT is unchanged (3 -> 3), only its value drops.
+  pressFull = 3
+  pressHalf = 0
+  applyPressResult("weak")
+  check("press_weak_downgrades_full_to_half", "2/1", icons())
+  check("press_weak_keeps_icon_count", "3", pressIconCount())
+
+  pressFull = 3
+  pressHalf = 0
+  applyPressResult("crit")
+  check("press_crit_rewards_like_weak", "2/1", icons())
+
+  // No FULL left: the bonus cannot chain forever off one icon.
+  pressFull = 0
+  pressHalf = 1
+  applyPressResult("weak")
+  check("press_weak_without_full_spends_half", "0/0", icons())
+
+  // HALF is always spent before FULL, so a weakness bonus decays.
+  pressFull = 2
+  pressHalf = 1
+  applyPressResult("normal")
+  check("press_half_is_spent_before_full", "2/0", icons())
+
+  pressFull = 2
+  pressHalf = 1
+  applyPressResult("miss")
+  check("press_miss_burns_two_icons", "1/0", icons())
+
+  pressFull = 2
+  pressHalf = 1
+  applyPressResult("null")
+  check("press_null_burns_two_icons", "1/0", icons())
+
+  // A blunder on the last icon ends the turn; it never carries a debt.
+  pressFull = 1
+  pressHalf = 0
+  applyPressResult("miss")
+  check("press_miss_cannot_go_negative", "0/0", icons())
+
+  pressFull = 2
+  pressHalf = 2
+  applyPressResult("repel")
+  check("press_repel_wipes_the_turn", "0/0", icons())
+
+  pressFull = 2
+  pressHalf = 2
+  applyPressResult("drain")
+  check("press_drain_wipes_the_turn", "0/0", icons())
+
+  // An unknown outcome degrades to a normal hit, never to a free action.
+  pressFull = 2
+  pressHalf = 0
+  applyPressResult("something_new")
+  check("press_unknown_result_costs_one_icon", "1/0", icons())
+
+  // PASS buys turn order at half price.
+  pressFull = 2
+  pressHalf = 1
+  consumePass()
+  check("press_pass_spends_half_first", "2/0", icons())
+
+  pressFull = 2
+  pressHalf = 0
+  consumePass()
+  check("press_pass_downgrades_when_no_half", "1/1", icons())
+
+  pressFull = 0
+  pressHalf = 0
+  check("press_empty_pool_stops_the_side", "false", hasPressTurns())
+  check("press_empty_pool_renders_as_nothing", "∅", pressIcons())
+
+  pressFull = 1
+  pressHalf = 1
+  check("press_icons_render_half_first", "◐ ●", pressIcons())
+  check("press_icon_count_sums_both_kinds", "2", pressIconCount())
+
+
+// ----------------------------------------------------------------------------
+// COMMANDER OVERKILL + REWARD ACCOUNTING — engine/rewards.lor
+// ----------------------------------------------------------------------------
+
+function testRewards()
+  loadCombatRules()
+
+  check("reward_overkill_is_negative_hp_over_max", "50", calculateCommanderOverkill(-500, 1000))
+  check("reward_overkill_capped_at_100", "100", calculateCommanderOverkill(-2000, 1000))
+  check("reward_overkill_zero_on_exact_kill", "0", calculateCommanderOverkill(0, 1000))
+  check("reward_overkill_zero_when_alive", "0", calculateCommanderOverkill(120, 1000))
+  check("reward_overkill_zero_without_max_hp", "0", calculateCommanderOverkill(-100, 0))
+
+  resetRewards()
+
+  defeatedEnemyXp = 200
+  defeatedEnemyReward = 100
+  commanderOverkillPercent = 50
+
+  finalizeRewards()
+
+  check("reward_bonus_is_linear_in_overkill", "100/50", "${overkillXpBonus}/${overkillRewardBonus}")
+  check("reward_total_is_base_plus_bonus", "300/150", "${totalXpReward}/${totalCurrencyReward}")
+
+  resetRewards()
+  check("reward_reset_clears_everything", "0/0/false", "${totalXpReward}/${defeatedEnemyXp}/${commanderWasKilled}")
+
+
+// ----------------------------------------------------------------------------
+// BUFF / DEBUFF LADDER — engine/actors.lor + engine/skills.lor
+// ----------------------------------------------------------------------------
+
+function testStages()
+  loadCombatRules()
+
+  check("stage_zero_is_neutral", "1", stageMultiplier(0))
+  check("stage_plus_three_is_max", stageMultiplier(3), stageMultiplier(9))
+  check("stage_minus_three_is_min", stageMultiplier(-3), stageMultiplier(-9))
+
+  startEncounter("commander_demo", "player")
+
+  var oni = party[3]
+
+  applyStage(oni, "attack", 9)
+  check("stage_clamped_to_max", "3", oni.attackStage)
+
+  applyStage(oni, "attack", -20)
+  check("stage_clamped_to_min", "-3", oni.attackStage)
+
+  // Buff and debuff share one ladder, so Tarukaja and Tarunda cancel exactly.
+  applyStage(oni, "attack", 3)
+  check("stage_buff_and_debuff_cancel_out", "0", oni.attackStage)
+
+  var dummy = spawnActor("oni", "player", 9)
+  dummy.agi = 0
+  check("stage_effective_agi_never_drops_to_zero", "1", effectiveAgi(dummy))
+
+
+// ----------------------------------------------------------------------------
+// ACCURACY AND CRITICALS — engine/skills.lor
+// ----------------------------------------------------------------------------
+
+function testAccuracy()
+  loadCombatRules()
+  startEncounter("commander_demo", "player")
+
+  var pixie = party[1]
+  var oni = party[3]
+
+  check("hit_chance_favours_the_faster_actor", "99", calculateHitChance(pixie, oni, false))
+  check("hit_chance_penalises_the_slower_actor", "71", calculateHitChance(oni, pixie, false))
+
+  // Even a hopeless AGI gap keeps a 65% floor: speed never makes a fight
+  // deterministic.
+  applyStage(pixie, "agility", 3)
+  applyStage(oni, "agility", -3)
+  check("hit_chance_never_below_the_floor", "65", calculateHitChance(oni, pixie, false))
+  check("hit_chance_smirk_cannot_miss", "100", calculateHitChance(oni, pixie, true))
+
+  applyStage(pixie, "agility", -3)
+  applyStage(oni, "agility", 3)
+
+  calcSmirkAttack = false
+  check("crit_magic_cannot_crit_by_default", "0", calculateCritChance(pixie, oni, getSkill("zio")))
+  check("crit_phys_adds_the_luck_gap", "9", calculateCritChance(pixie, oni, getSkill("attack")))
+
+  calcSmirkAttack = true
+  check("crit_smirk_forces_a_critical", "100", calculateCritChance(pixie, oni, getSkill("zio")))
+  calcSmirkAttack = false
+
+
+// ----------------------------------------------------------------------------
+// DAMAGE FORMULA — engine/skills.lor, with the dice pinned
+// ----------------------------------------------------------------------------
+
+function testDamage()
+  pinTheDice()
+  startEncounter("commander_demo", "player")
+
+  var oni = party[3]
+  var boss = enemies[0]
+
+  // 34 power + 62 STR * 1.45 = 123.9 -> 124
+  calcIsCritical = false
+  check("damage_is_power_plus_scaled_stat", "124", calculateDamage(oni, boss, getSkill("attack")))
+
+  calcIsCritical = true
+  check("damage_critical_multiplies_the_hit", "186", calculateDamage(oni, boss, getSkill("attack")))
+  calcIsCritical = false
+
+  // Defense stages divide, so a buff is worth the same share of any hit.
+  applyStage(boss, "defense", 3)
+  check("damage_defense_stage_divides_it", "85", calculateDamage(oni, boss, getSkill("attack")))
+  applyStage(boss, "defense", -3)
+
+  // A hit that connects always shows a number — "0 damage" would read as a bug.
+  combatRules.damageVarianceMin = 0
+  combatRules.damageVarianceMax = 0
+  check("damage_floor_is_one", "1", calculateDamage(oni, boss, getSkill("attack")))
+
+  loadCombatRules()
+
+
+// ----------------------------------------------------------------------------
+// ELEMENTAL WHEEL AND SMIRK — engine/actors.lor
+// ----------------------------------------------------------------------------
+
+function testAffinity()
+  loadCombatRules()
+  startEncounter("commander_demo", "player")
+
+  var boss = enemies[0]
+
+  check("affinity_reads_a_weakness", "weak", getAffinity(boss, "ice"))
+  check("affinity_reads_a_resistance", "resist", getAffinity(boss, "force"))
+  check("affinity_unknown_element_is_normal", "normal", getAffinity(boss, "poison"))
+  check("affinity_almighty_is_outside_the_wheel", "normal", getAffinity(boss, "almighty"))
+
+  // Smirk, defensive side: a smirking target cannot be chain-exploited.
+  boss.smirk = true
+  check("affinity_smirk_hides_the_weakness", "normal", getAffinity(boss, "ice"))
+  boss.smirk = false
+  check("affinity_weakness_returns_after_smirk", "weak", getAffinity(boss, "ice"))
+
+
+// ----------------------------------------------------------------------------
+// TEAMS, TURN ORDER, SIDE TURNS — engine/actors.lor + engine/combat.lor
+// ----------------------------------------------------------------------------
+
+function testActors()
+  loadCombatRules()
+  startEncounter("commander_demo", "player")
+
+  check("actor_ids_encode_team_and_slot", "player_3_oni", party[3].id)
+  check("actor_spawns_at_full_hp", "500/500", "${enemies[0].hp}/${enemies[0].maxHp}")
+
+  // Runtime state must never write through to the shared template, or a change
+  // would follow that species into every later battle.
+  party[0].skills.add("zan")
+  var fresh = spawnActor("hunter", "player", 9)
+  var leaked = fresh.skills.has("zan")
+  check("actor_spawn_copies_the_skill_list", "false", leaked)
+
+  startEncounter("commander_demo", "player")
+
+  check("actor_order_is_agi_descending", "Pixie/Hunter/Jack Frost/Oni", orderNames(playerOrder))
+  check("actor_commander_is_enemy_slot_zero", enemies[0].id, commanderId)
+  check("actor_commander_flag", "true", isCommander(enemies[0]))
+  check("actor_minion_is_not_commander", "false", isCommander(enemies[1]))
+
+  // A side opens with one FULL icon per living member: losing a member costs an
+  // action every round from then on.
+  check("actor_side_opens_with_one_icon_per_member", "4/0", icons())
+
+  party[0].alive = false
+  refreshOrders()
+  check("actor_dead_actors_leave_the_order", "Pixie/Jack Frost/Oni", orderNames(playerOrder))
+
+  startSideTurn("player")
+  check("actor_icons_shrink_with_the_team", "3/0", icons())
+
+  // A solo boss keeps pace through bonus icons rather than inflated stats.
+  startEncounter("boss_press_test", "player")
+  startSideTurn("enemy")
+  check("actor_encounter_bonus_press_adds_icons", "3/0", icons())
+
+  // Order is Pixie, Hunter, Jack Frost, Oni; killing Hunter (party slot 0) must
+  // make the pointer jump straight from Pixie to Jack Frost.
+  startEncounter("commander_demo", "player")
+  currentSide = "player"
+  actorIndex = 0
+  check("actor_order_starts_on_the_fastest", "Pixie", currentActor().name)
+  party[0].alive = false
+  advanceActor()
+  check("actor_advance_skips_the_dead", "Jack Frost", currentActor().name)
+
+
+// ----------------------------------------------------------------------------
+// ACTION RESOLUTION — engine/combat.lor, with the dice pinned
+// ----------------------------------------------------------------------------
+
+function testResolution()
+  pinTheDice()
+  startEncounter("commander_demo", "player")
+
+  var oniId = party[3].id
+  var jackId = party[2].id
+  var bossId = enemies[0].id
+
+  pressFull = 4
+  pressHalf = 0
+
+  performSkill(oniId, bossId, "attack")
+  check("battle_normal_hit_costs_one_icon", "3/0", icons())
+  check("battle_damage_lands_on_the_target", "376", enemies[0].hp)
+
+  // Ice is the Commander's weakness: 120 -> x1.5 = 180, and the icon is only
+  // downgraded instead of spent.
+  performSkill(jackId, bossId, "bufu")
+  check("battle_weak_hit_grants_a_half_icon", "2/1", icons())
+  check("battle_weak_hit_multiplies_damage", "196", enemies[0].hp)
+
+  check("battle_skill_costs_mp", "96", party[2].mp)
+
+  // A skill nobody can pay for is refused before anything is spent.
+  party[2].mp = 0
+  performSkill(jackId, bossId, "bufu")
+  check("battle_unaffordable_skill_changes_nothing", "196", enemies[0].hp)
+  check("battle_unaffordable_skill_costs_no_icon", "2/1", icons())
+
+  // Nue: phys NULL and elec DRAIN, the two punishing reads.
+  startEncounter("boss_press_test", "player")
+
+  var nueId = enemies[0].id
+  var pixieId = party[1].id
+
+  pressFull = 4
+  pressHalf = 0
+  performSkill(party[3].id, nueId, "attack")
+  check("battle_null_deals_no_damage", "650", enemies[0].hp)
+  check("battle_null_burns_two_icons", "2/0", icons())
+
+  enemies[0].hp = 400
+  pressFull = 4
+  pressHalf = 0
+  performSkill(pixieId, nueId, "zio")
+  var healed = enemies[0].hp > 400
+  check("battle_drain_heals_the_target", "true", healed)
+  check("battle_drain_wipes_the_whole_turn", "0/0", icons())
+
+  loadCombatRules()
+
+
+// ----------------------------------------------------------------------------
+// COMMANDER KILL — the payoff of the whole design
+// ----------------------------------------------------------------------------
+
+function testCommanderKill()
+  pinTheDice()
+  startEncounter("commander_demo", "player")
+
+  var oniId = party[3].id
+  var bossId = enemies[0].id
+
+  pressFull = 4
+  pressHalf = 0
+
+  // 120 HP left, a 190 damage Heavy Strike: final HP -70 on a 500 HP boss.
+  enemies[0].hp = 120
+  performSkill(oniId, bossId, "heavy_strike")
+
+  check("commander_kill_ends_the_battle", "true", battleEnded)
+  check("commander_kill_is_a_player_victory", "player", victor)
+  check("commander_kill_reports_its_reason", "commander_defeated", battleEndReason)
+  check("commander_keeps_its_negative_hp", "-70", enemies[0].hp)
+  check("commander_overkill_is_measured_on_max_hp", "14", commanderOverkillPercent)
+
+  // The escort is still alive and pays nothing: only the Commander's own 220 XP
+  // and 160 currency were banked.
+  check("commander_surviving_minions_pay_nothing", "220/160", "${defeatedEnemyXp}/${defeatedEnemyReward}")
+  check("commander_overkill_tops_up_the_payout", "251/182", "${totalXpReward}/${totalCurrencyReward}")
+
+  // A fallen party member is clamped to 0 — only the Commander needs the
+  // overshoot.
+  startEncounter("commander_demo", "player")
+  party[1].hp = 5
+  performSkill(enemies[0].id, party[1].id, "attack")
+  check("commander_party_death_clamps_hp_to_zero", "0", party[1].hp)
+  check("commander_party_death_flags_the_actor", "false", party[1].alive)
+
+  // Wiping the party is a defeat even with the Commander still standing.
+  for actor in party
+    actor.alive = false
+
+  checkBattleEnd()
+  check("commander_party_wipe_is_a_defeat", "enemy", victor)
+  check("commander_party_wipe_reports_its_reason", "party_defeated", battleEndReason)
+
+  loadCombatRules()
+
+
+// ----------------------------------------------------------------------------
+// ENEMY AI — engine/ai.lor
+// ----------------------------------------------------------------------------
+
+function testAi()
+  loadCombatRules()
+  startEncounter("commander_demo", "player")
+
+  check("ai_scores_a_weakness_above_everything", "1000", aiAffinityScore("weak"))
+  check("ai_scores_repel_worst", "-3000", aiAffinityScore("repel"))
+  check("ai_scores_an_unknown_affinity_as_neutral", "100", aiAffinityScore("wat"))
+
+  // The Goblin Mage knows fire, elec and phys; the party is weak to fire (Jack
+  // Frost) and elec (Oni). Both score 1042, and the first pair found wins — the
+  // scan runs skills in list order, so Agi on Jack Frost is the answer.
+  var plan = chooseSmartDamageAction(enemies[2])
+  check("ai_picks_the_weakness_it_can_hit", "agi", plan.skill)
+  check("ai_aims_at_the_weak_target", party[2].id, plan.target)
+
+  // Healing comes first, but only below the threshold.
+  currentSide = "enemy"
+  refreshOrders()
+  actorIndex = 0
+  check("ai_acts_with_the_fastest_enemy", "Goblin Mage", currentActor().name)
+
+  check("ai_ignores_a_healthy_team", "", findInjuredAlly("enemy", combatRules.aiHealThreshold))
+
+  var healthy = chooseEnemyAction()
+  check("ai_attacks_when_nobody_needs_a_heal", "damage", getSkill(healthy.skill).kind)
+
+  enemies[0].hp = 100
+  var wounded = chooseEnemyAction()
+  check("ai_heals_below_the_threshold", "dia", wounded.skill)
+  check("ai_heals_the_most_wounded_ally", enemies[0].id, wounded.target)
+
+  currentSide = "player"
+
+
+// ----------------------------------------------------------------------------
+// MENU LABELS — engine/ui.lor
+// ----------------------------------------------------------------------------
+
+function testUiLabels()
+  loadCombatRules()
+  startEncounter("commander_demo", "player")
+
+  currentSide = "player"
+  actorIndex = 0
+
+  // Pixie acts first (highest AGI). Her menu must name the skill AND its type:
+  // every elemental spell costs the same, so the element IS the decision.
+  check("ui_label_names_the_skill_and_its_element", "Attack (phys) — 0 MP", currentSkillLabel(0))
+  check("ui_label_tags_an_elemental_spell", "Zio (elec) — 4 MP", currentSkillLabel(1))
+  check("ui_label_tags_a_heal", "Dia (heal) — 5 MP", currentSkillLabel(3))
+  check("ui_label_tags_a_buff", "Sukukaja (buff) — 6 MP", currentSkillLabel(4))
+  check("ui_label_empty_slot_beyond_the_move_list", "Empty", currentSkillLabel(7))
+  check("ui_slot_exists_only_within_the_move_list", "false", currentSkillExists(7))
+
+  testSkillList = currentSkillList()
+
+  // An unaffordable skill keeps its line, name and cost included.
+  party[1].mp = 0
+  check("ui_label_flags_a_skill_with_no_mp", "Zio (elec) — 4 MP [NO MP]", currentSkillLabel(1))
+  check("ui_unaffordable_skill_is_disabled", "false", currentSkillEnabled(1))
+  check("ui_free_skill_stays_enabled", "true", currentSkillEnabled(0))
+
+  actorIndex = 1
+  check("ui_acts_in_agi_order", "Hunter", currentActor().name)
+  check("ui_label_tags_a_debuff", "Sukunda (debuff) — 6 MP", currentSkillLabel(6))
+
+  check("ui_slot_label_tags_the_commander", "Goblin Commander [COMMANDER] — 500/500 HP", teamSlotLabel("enemy", 0))
+  check("ui_slot_label_beyond_the_team_is_empty", "Empty", teamSlotLabel("enemy", 3))
+  check("ui_slot_beyond_the_team_is_not_selectable", "false", teamSlotAlive("enemy", 3))
+
+  enemies[1].alive = false
+  check("ui_slot_label_marks_the_dead", "Goblin Soldier [DEAD]", teamSlotLabel("enemy", 1))
+  check("ui_dead_slot_is_not_selectable", "false", teamSlotAlive("enemy", 1))
+
+
+// ----------------------------------------------------------------------------
+// END-OF-BATTLE SCORE — engine/score.lor
+// ----------------------------------------------------------------------------
+
+function testScore()
+  pinTheDice()
+  startEncounter("commander_demo", "player")
+
+  var oniId = party[3].id
+  var bossId = enemies[0].id
+
+  pressFull = 9
+  pressHalf = 0
+
+  check("score_starts_empty", "0/0/false", "${commanderDamageDealt}/${partyDamageTaken}/${commanderKeptForLast}")
+
+  // Damage on the Commander and damage on the party are counted separately —
+  // one is the objective, the other is the cost.
+  performSkill(oniId, bossId, "attack")
+  check("score_counts_damage_on_the_commander", "124", commanderDamageDealt)
+
+  performSkill(bossId, party[0].id, "attack")
+  check("score_counts_damage_taken_by_the_party", "104", partyDamageTaken)
+  check("score_party_damage_is_not_commander_damage", "124", commanderDamageDealt)
+
+  // Escort first, Commander last: the line the reward system punishes and the
+  // score rewards. 120 HP left, a 190 damage Heavy Strike -> -70 on a 500 bar.
+  enemies[1].hp = 1
+  enemies[2].hp = 1
+  performSkill(oniId, enemies[1].id, "attack")
+  performSkill(oniId, enemies[2].id, "attack")
+
+  enemies[0].hp = 120
+  performSkill(oniId, bossId, "heavy_strike")
+
+  check("score_commander_kept_for_last", "true", commanderKeptForLast)
+  check("score_is_finalized_with_the_battle", "true", battleEnded)
+
+  // 124 + 190 = 314 damage on a 500 HP bar -> 0.628 * 200
+  check("score_commander_damage_component", "126", scoreCommanderDamage)
+  // 14% Overkill -> 0.14 * 300
+  check("score_overkill_component", "42", scoreOverkill)
+  // Round 1, nothing spent from the 300 point speed budget
+  check("score_speed_component", "300", scoreSpeed)
+  // 104 damage taken out of 800 party HP -> 0.87 * 200
+  check("score_survival_component", "174", scoreSurvival)
+  check("score_commander_last_component", "250", scoreCommanderLast)
+  check("score_total_is_the_sum_of_its_parts", "892", scoreTotal)
+  check("score_rank_follows_the_total", "A", scoreRank)
+  check("score_rounds_used_is_recorded", "1", roundsUsed)
+
+  testScoreArt = scoreArt()
+  testScoreBreakdown = scoreBreakdown()
+  testScoreScreen = scoreScreen()
+
+  // The overshoot is paid by the Overkill component; paying it twice would let
+  // one huge finisher outweigh the whole fight.
+  commanderDamageDealt = 5000
+  finalizeScore()
+  check("score_commander_damage_is_capped_at_the_hp_bar", "200", scoreCommanderDamage)
+
+  // Chaque round de plus rend un plein pot d'icones a l'adversaire : le budget
+  // vitesse se vide round apres round, puis reste a zero.
+  roundNumber = 4
+  finalizeScore()
+  check("score_speed_costs_one_round_at_a_time", "180", scoreSpeed)
+  check("score_speed_records_the_rounds", "4", roundsUsed)
+
+  roundNumber = 12
+  finalizeScore()
+  check("score_speed_bottoms_out_at_zero", "0", scoreSpeed)
+
+  roundNumber = 1
+  finalizeScore()
+
+  check("score_rank_s_starts_at_its_threshold", "S", rankFor(900))
+  check("score_rank_a_just_below", "A", rankFor(899))
+  check("score_rank_b_band", "B", rankFor(500))
+  check("score_rank_c_band", "C", rankFor(300))
+  check("score_rank_d_is_the_floor", "D", rankFor(0))
+
+  check("score_rank_icons_spell_the_tier", "● ● ● ● ●", rankIcons("S"))
+  check("score_rank_icons_worst_tier_is_a_half", "◐", rankIcons("D"))
+  check("score_rank_title", "FLAWLESS COMMAND", rankTitle("S"))
+
+  // A defeat pays neither speed nor the completionist bonus: rewarding a fast
+  // loss would tell the player to give up quickly.
+  startEncounter("commander_demo", "player")
+
+  for actor in party
+    actor.hp = 0
+    actor.alive = false
+
+  checkBattleEnd()
+
+  check("score_defeat_pays_no_speed", "0", scoreSpeed)
+  check("score_defeat_pays_no_commander_bonus", "0", scoreCommanderLast)
+  check("score_defeat_is_the_lowest_rank", "D", scoreRank)
+
+  // A new encounter starts from a clean sheet.
+  startEncounter("commander_demo", "player")
+  check("score_reset_between_battles", "0/0/0", "${scoreTotal}/${commanderDamageDealt}/${partyDamageTaken}")
+
+  loadCombatRules()
+
+
+// ----------------------------------------------------------------------------
+// SCRIPT-AUTHOR MISTAKES — they must degrade, never crash
+// ----------------------------------------------------------------------------
+
+function testEncounterErrors()
+  loadCombatRules()
+  startEncounter("does_not_exist", "player")
+
+  check("encounter_unknown_id_fails_soft", "error", victor)
+  check("encounter_unknown_id_ends_the_battle", "true", battleEnded)
+  check("encounter_unknown_id_spawns_nobody", "0/0", "${party.length()}/${enemies.length()}")
+
+  startEncounter("commander_demo", "enemy")
+  check("encounter_enemy_advantage_starts_the_enemy_side", "enemy", currentSide)
+
+  startEncounter("commander_demo", "player")
+  check("encounter_player_advantage_starts_the_player_side", "player", currentSide)
+  check("encounter_start_clears_the_previous_battle", "false", battleEnded)
+
+  performSkill(party[0].id, enemies[0].id, "not_a_skill")
+  check("encounter_unknown_skill_is_reported", "Unknown skill: not_a_skill", battleLog)
+
+
+beat Start
+  initializeDatabases()
+
+  testPressEconomy()
+  testRewards()
+  testStages()
+  testAccuracy()
+  testDamage()
+  testAffinity()
+  testActors()
+  testResolution()
+  testCommanderKill()
+  testAi()
+  testUiLabels()
+  testScore()
+  testEncounterErrors()
+
+  Harness complete.
+  -> .
