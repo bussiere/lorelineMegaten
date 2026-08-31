@@ -132,6 +132,16 @@ function loadCombatRules()
     scoreSurvivalPoints: 200,
     scoreCommanderLastBonus: 250,
 
+    // A fallen ally is the most expensive thing that can happen in a fight: the
+    // side loses one Press Turn icon every round from then on. Damage taken
+    // alone priced it at about 36 points out of 1250 — cheaper than a slow
+    // round — so a casualty carries its own penalty AND caps the rank.
+    //
+    // The cap is what makes the tier titles honest: "FLAWLESS COMMAND" cannot
+    // be handed to a squad that came back a member short.
+    scoreCasualtyPenalty: 150,
+    scoreRankCapOnCasualty: "B",
+
     scoreRankS: 900,
     scoreRankA: 700,
     scoreRankB: 500,

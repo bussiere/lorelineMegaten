@@ -10,7 +10,20 @@
 // comes from engine/score.lor, so a new tier or a new component never touches
 // this file.
 
+// THE GATE. The record is reached on purpose, never by scrolling into it.
+//
+// Without this single-option choice the panel arrived in the same breath as the
+// reward summary, and the rank flashed past while the player was still reading
+// how much XP they earned. A deliberate click separates the two questions —
+// what the battle paid, then how it was won — and gives the verdict a screen of
+// its own.
 beat ScoreScreen
+  choice
+    View the battle record
+      -> ScoreCard
+
+
+beat ScoreCard
   $scoreScreen()
 
   choice

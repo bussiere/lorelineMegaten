@@ -45,6 +45,7 @@ state
   testScoreArt: ""
   testScoreBreakdown: ""
   testScoreScreen: ""
+  testScoreScreenCasualty: ""
 
 
 function check(name, expected, actual)
@@ -644,6 +645,45 @@ function testScore()
   check("score_rank_icons_worst_tier_is_a_half", "◐", rankIcons("D"))
   check("score_rank_title", "FLAWLESS COMMAND", rankTitle("S"))
 
+  // ONE ALLY DOWN. Same near-perfect fight as above — escort cleared, Commander
+  // executed in round 1 — but Pixie does not come back. The arithmetic still
+  // says A; the letter must say B, because the fight charged the party an icon
+  // per round for that loss and the score has to charge it too.
+  pinTheDice()
+  startEncounter("commander_demo", "player")
+
+  var oni2 = party[3].id
+  var boss2 = enemies[0].id
+
+  pressFull = 9
+  pressHalf = 0
+
+  performSkill(oni2, boss2, "attack")
+
+  party[1].hp = 5
+  performSkill(boss2, party[1].id, "attack")
+  check("score_casualty_kills_the_ally", "false", party[1].alive)
+
+  enemies[1].hp = 1
+  enemies[2].hp = 1
+  performSkill(oni2, enemies[1].id, "attack")
+  performSkill(oni2, enemies[2].id, "attack")
+
+  enemies[0].hp = 120
+  performSkill(oni2, boss2, "heavy_strike")
+
+  check("score_casualty_is_counted", "1", partyMembersLost)
+  check("score_casualty_costs_points", "-150", scoreCasualties)
+  check("score_casualty_total_after_penalty", "742", scoreTotal)
+  check("score_casualty_points_would_say", "A", rankFor(scoreTotal))
+  check("score_casualty_rank_is_capped", "B", scoreRank)
+
+  testScoreScreenCasualty = scoreScreen()
+
+  // No loss, no cap: the ceiling must not leak into a clean run.
+  startEncounter("commander_demo", "player")
+  check("score_clean_run_is_not_capped", "0", partyMembersDown())
+
   // A defeat pays neither speed nor the completionist bonus: rewarding a fast
   // loss would tell the player to give up quickly.
   startEncounter("commander_demo", "player")
@@ -657,10 +697,12 @@ function testScore()
   check("score_defeat_pays_no_speed", "0", scoreSpeed)
   check("score_defeat_pays_no_commander_bonus", "0", scoreCommanderLast)
   check("score_defeat_is_the_lowest_rank", "D", scoreRank)
+  check("score_defeat_counts_every_loss", "4", partyMembersLost)
+  check("score_defeat_total_floors_at_zero", "0", scoreTotal)
 
   // A new encounter starts from a clean sheet.
   startEncounter("commander_demo", "player")
-  check("score_reset_between_battles", "0/0/0", "${scoreTotal}/${commanderDamageDealt}/${partyDamageTaken}")
+  check("score_reset_between_battles", "0/0/0/0", "${scoreTotal}/${commanderDamageDealt}/${partyDamageTaken}/${partyMembersLost}")
 
   loadCombatRules()
 

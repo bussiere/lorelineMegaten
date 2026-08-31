@@ -90,6 +90,8 @@ state
   scoreSpeed: 0
   scoreSurvival: 0
   scoreCommanderLast: 0
+  scoreCasualties: 0
+  partyMembersLost: 0
 
   scoreTotal: 0
   scoreRank: ""

@@ -23,6 +23,9 @@
 //                     another full pool of icons, so a slow win is a worse win.
 //   SURVIVAL          damage the party took, against its total HP. A clean
 //                     fight is one where the reads were right the first time.
+//   CASUALTIES        every ally who did not come back. Negative, and it caps
+//                     the rank: the fight already charges a lost member one
+//                     icon per round, the score has to charge it too.
 //   COMMANDER LAST    the completionist bonus: every minion down BEFORE the
 //                     Commander. It is the only component that pays for the
 //                     line the reward system punishes, which is what makes the
@@ -41,6 +44,8 @@ function resetScore()
   scoreSpeed = 0
   scoreSurvival = 0
   scoreCommanderLast = 0
+  scoreCasualties = 0
+  partyMembersLost = 0
 
   scoreTotal = 0
   scoreRank = ""
@@ -66,6 +71,43 @@ function noteDamage(target, amount)
 // the battle stops there anyway.
 function noteCommanderKillOrder()
   commanderKeptForLast = countAliveNonCommanderEnemies() == 0
+
+
+function partyMembersDown()
+  var count = 0
+
+  for actor in party
+    if !actor.alive
+      count += 1
+
+  return count
+
+
+// Rank order as a number, S being the best. Used to apply a ceiling: a capped
+// rank is the WORSE of what the points bought and what the fight allows.
+function rankIndex(rank)
+  switch rank
+    case "S"
+      return 0
+
+    case "A"
+      return 1
+
+    case "B"
+      return 2
+
+    case "C"
+      return 3
+
+    default
+      return 4
+
+
+function worseRank(left, right)
+  if rankIndex(left) >= rankIndex(right)
+    return left
+
+  return right
 
 
 function partyTotalMaxHp()
@@ -108,8 +150,21 @@ function finalizeScore()
     var intact = max(0, 1 - partyDamageTaken / pool)
     scoreSurvival = round(intact * combatRules.scoreSurvivalPoints)
 
-  scoreTotal = scoreCommanderDamage + scoreOverkill + scoreSpeed + scoreSurvival + scoreCommanderLast
+  partyMembersLost = partyMembersDown()
+  scoreCasualties = -partyMembersLost * combatRules.scoreCasualtyPenalty
+
+  // Floored at zero: the panel shows a score, not a debt.
+  scoreTotal = max(
+    0,
+    scoreCommanderDamage + scoreOverkill + scoreSpeed + scoreSurvival + scoreCommanderLast + scoreCasualties
+  )
+
   scoreRank = rankFor(scoreTotal)
+
+  // The ceiling is deliberately blunt and legible: come back a member short and
+  // the letter says so, however good the arithmetic was.
+  if partyMembersLost > 0
+    scoreRank = worseRank(scoreRank, combatRules.scoreRankCapOnCasualty)
 
 
 function rankFor(total)
@@ -303,6 +358,10 @@ function scoreArt()
   lines.add(rankIcons(scoreRank))
   lines.add("RANK ${scoreRank} - ${rankTitle(scoreRank)}")
 
+  // Say WHY the letter is what it is, or a capped rank reads as a scoring bug.
+  if partyMembersLost > 0
+    lines.add("capped at ${combatRules.scoreRankCapOnCasualty} - ${partyMembersLost} ${partyMembersLost > 1 ? "allies" : "ally"} lost")
+
   return lines.join("\n")
 
 
@@ -328,6 +387,7 @@ function scoreBreakdown()
   lines.add(scoreRow("Rounds used", "${roundsUsed}", scoreSpeed))
   lines.add(scoreRow("Party damage taken", "${round(partyDamageTaken)}/${partyTotalMaxHp()}", scoreSurvival))
   lines.add(scoreRow("Commander kept for last", commanderKeptForLast ? "yes" : "no", scoreCommanderLast))
+  lines.add(scoreRow("Allies lost", "${partyMembersLost}", scoreCasualties))
 
   lines.add(innerRule())
   lines.add(dotted("TOTAL", 26) + " ${scoreTotal} pts - RANK ${scoreRank}")
